@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 const session={user:{id:'browser-user',name:'test'},mode:'internal',modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-04',limit:100000,used:0}};
 test('multi-session history, retry, local quiz feedback, persistence and delete',async({page})=>{
  let loggedIn=false;const requests:any[]=[];
+ let finishQuiz!: () => void;
+ const quizFollowUp=new Promise<void>(resolve=>{finishQuiz=resolve;});
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/health')return route.fulfill({json:{status:'ok'}});
@@ -12,6 +14,7 @@ test('multi-session history, retry, local quiz feedback, persistence and delete'
    const last=body.messages.at(-1);
    if(last.content==='失败请求'&&requests.filter(v=>v.messages.at(-1).content==='失败请求').length===1)return route.fulfill({status:502,json:{error:{code:'MODEL_UNAVAILABLE',message:'测试故障'}}});
    const quiz=last.content==='出题';
+   if(last.role==='tool'&&last.tool_call_id==='q-1')await quizFollowUp;
    const events=[{type:'start',requestId:body.requestId},...(quiz?[{type:'tool_call',id:'q-1',name:'present_quiz',arguments:{question:'1+1 等于多少？',options:[{id:'A',text:'2',explanation:'相加得到2'},{id:'B',text:'3',explanation:'3不正确'}],correctOptionId:'A'}}]:[{type:'text_delta',delta:'回答：'+(last.role==='tool'?'请选择选项':last.content)}]),{type:'usage',usage:{input:10,output:2,total:12}},{type:'finish',stopReason:quiz?'toolUse':'stop'}];
    return route.fulfill({contentType:'text/event-stream',body:events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join('')});
   }
@@ -27,7 +30,20 @@ test('multi-session history, retry, local quiz feedback, persistence and delete'
  await send('失败请求');await expect(page.getByText('测试故障')).toBeVisible();await page.getByRole('button',{name:'重试',exact:true}).click();await expect(page.getByText('回答：失败请求',{exact:true})).toBeVisible();
  expect(requests.at(-1).messages.filter((m:any)=>m.content==='失败请求')).toHaveLength(1);
  expect(page.locator('.msg.user')).toHaveCount(2);
- await send('出题');await expect(page.getByText('1+1 等于多少？')).toBeVisible();
+ await page.getByLabel('输入消息').fill('出题');
+ await page.getByRole('button',{name:'发送消息',exact:true}).click();
+ const tools=page.locator('.msg.assistant').last().locator('.tool-block');
+ try {
+  await expect(page.getByRole('button',{name:'停止',exact:true})).toBeVisible();
+  await expect(tools.locator('ol')).toBeHidden();
+  await tools.locator('summary').click();
+  await expect(tools.locator('ol')).toBeVisible();
+ } finally {
+  finishQuiz();
+ }
+ await expect(page.getByRole('button',{name:'停止',exact:true})).toHaveCount(0);
+ await expect(tools.locator('ol')).toBeVisible();
+ await expect(page.getByText('1+1 等于多少？')).toBeVisible();
  const before=requests.length;await page.locator('.quiz-option').first().click();await expect(page.getByText('回答正确',{exact:true})).toBeVisible();expect(requests.length).toBe(before);
  await expect(page.getByText('已保存到当前浏览器')).toBeVisible();await page.waitForTimeout(300);
  await page.reload();await expect(page.getByText('回答正确',{exact:true})).toBeVisible();

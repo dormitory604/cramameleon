@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentAction, AppSession, ChatMessage, LearningState, MaterialScope, Source } from '../contracts/index.ts';
-import { Materials } from './Materials.tsx';
+import { MaterialComposer } from './Materials.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildHistory } from '../agent/context.ts';
 import { loadData, saveData } from '../session/appStore.ts';
@@ -116,7 +116,7 @@ export function App() {
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
-  }, [input]);
+  }, [input, conversationId]);
 
   async function authorize() {
     setAuthBusy(true); setNotice('');
@@ -267,7 +267,7 @@ export function App() {
             ? <article key={message.id} className="msg user"><div className="bubble">{message.text}</div></article>
             : <article key={message.id} className="msg assistant">
               <div className="msg-head"><span className="brand-mark small">C</span>{message.status && message.status !== 'completed' && <span className={`run-status ${message.status}`}>{statusText[message.status]}</span>}</div>
-              {!!message.logs?.length && <details className="tool-block" open={message.status === 'running'}>
+              {!!message.logs?.length && <details className="tool-block">
                 <summary><span className="tool-icon">⚙</span><span>工具调用</span><span className="tool-count">{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary>
                 <ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol>
               </details>}
@@ -296,17 +296,24 @@ export function App() {
       <footer className="composer-wrap">
         {!appSession?.modelReady && <div role="alert" className="notice">模型尚未配置。请在服务器环境文件填写真实 API 密钥并重启服务。</div>}
         {appSession && <div className="composer-hint">北京时间今日 token：{appSession.budget.used.toLocaleString()} / {appSession.budget.limit.toLocaleString()}（含预留）</div>}
-        <Materials key={conversationId} scope={materials[conversationId] ?? {documents:[],selectedIds:[]}} disabled={busy || importing || !loaded} onBusy={setImporting} onSource={setSource} onChange={scope=>setMaterials(previous=>({...previous,[conversationId]:scope}))}/>
         <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy || importing} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {notice && <div role="alert" className="notice">{notice}</div>}
-        <form className="composer" onSubmit={event => { event.preventDefault(); void run(input); }}>
-          <label className="sr-only" htmlFor="message-input">输入消息</label>
-          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={input} disabled={busy || importing || !loaded || !appSession?.modelReady} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
-          <div className="composer-bar">
+        <MaterialComposer
+          key={conversationId}
+          scope={materials[conversationId] ?? { documents: [], selectedIds: [] }}
+          disabled={busy || importing || !loaded}
+          onBusy={setImporting}
+          onSource={setSource}
+          onChange={scope => setMaterials(previous => ({ ...previous, [conversationId]: scope }))}
+          onSubmit={() => void run(input)}
+          actions={<>
             <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
             {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={importing || !input.trim() || !loaded || !appSession?.modelReady} aria-label="发送消息">↑</button>}
-          </div>
-        </form>
+          </>}
+        >
+          <label className="sr-only" htmlFor="message-input">输入消息</label>
+          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={input} disabled={busy || importing || !loaded || !appSession?.modelReady} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
+        </MaterialComposer>
       </footer>
     </main>
 
