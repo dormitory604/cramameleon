@@ -2,7 +2,7 @@
 
 B 分支已将固定脚本 Demo 替换为真实 DeepSeek 模型代理。React UI → 浏览器 Pi Core → Go 单次模型代理；工具仍在浏览器执行，Go 不运行 Agent 循环。
 
-当前可用：内部访问口令、持久应用会话、按用户隔离的多对话、有效历史与会话偏好、失败重试、取消、真实问答、自编单选题及本地反馈、SQLite 全局 token 预算。模型未配置时明确禁用发送。
+当前可用：内部访问口令、持久应用会话、多对话、教学 Skill 与学习进度、真实模型问答、资料改编题及本地反馈、SQLite 预算，以及本地文件导入、解析、选择、检索和引用闭环。模型未配置时禁用发送，仍可导入与查看本地资料。
 
 ## 配置和运行
 
@@ -14,7 +14,7 @@ B 分支已将固定脚本 Demo 替换为真实 DeepSeek 模型代理。React UI
 - `APP_DAILY_TOKEN_BUDGET`：默认 100000，按北京时间自然日计算全局输入+输出 token。
 - `APP_MAX_OUTPUT_TOKENS`：默认 2048；`APP_MAX_INPUT_BYTES`：默认 64000。
 
-内部访问口令与真实 API 密钥在目标服务器 `.env.internal` 中配置，修改后重启内测服务。环境文件和 SQLite 不提交 Git。不得在前端设置 VITE 模型密钥。
+内部访问口令与真实 API 密钥在目标服务器 `.env.internal` 中配置，修改后重启内测服务。本地环境文件不代表服务器当前配置。环境文件和 SQLite 不提交 Git。不得在前端设置 VITE 模型密钥。
 
 ```sh
 npm ci --no-audit --no-fund
@@ -54,7 +54,7 @@ sh scripts/internal.sh start
 - 题目通过 `present_quiz` 工具完整返回并校验。支持自编题，以及有已读资料来源的改编题/原题；原题必须核对题干和选项。每轮最多一道题，最多修复一次，再失败退回讲解；作答或看答案不发模型请求。
 - 默认每轮 6 次工具/120 秒，另外最多 7 次模型请求；取消、终止后丢弃迟到事件。
 - 本机数据使用新的 `cramameleon` IndexedDB，按真实内部用户 ID 分区。旧 `cramameleon-demo` 数据保留但不自动混入真实学习历史。
-- `search_context`、`cite_sources` 仅处理当前已选且已解析的文本块，引用只能使用本轮已读块。文件上传/解析、旧站资料搜索/读取及正式资料选择界面仍未接入；不能把工具支持等同于完整资料流程已完成。
+- `search_context`、`cite_sources` 仅处理当前已选且已解析的文本块，引用只能使用本轮已读块。本地导入、解析、多份资料勾选和文本定位已接入；旧站资料搜索/读取仍未接入。
 
 ## API
 
@@ -81,6 +81,16 @@ npx playwright install chromium
 npx playwright test
 ```
 
-也可通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定已有 Chrome 路径。浏览器测试使用测试上游，覆盖会话隔离、重试去重、题板反馈、恢复/删除和模型未配置；Go 测试验证协议转换、分片工具参数、权限、取消和持久预算。新阶段真实模型验收已通过 12 个用例，覆盖简单问答、教学 Skill、复习范围与续接、出题、临时偏好及已解析资料的引用与注入防护，详见 [教学执行验收](docs/Agent教学执行验收-2026-11-04.md)。本次清理只删除旧联调实现及其专用测试，不重复消耗真实模型额度；协议、取消、历史与教学工具测试继续使用真实 PiAgentAdapter。
+也可通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定已有 Chrome 路径。浏览器测试使用测试上游，覆盖会话隔离、重试去重、题板反馈、恢复/删除和模型未配置；Go 测试验证协议转换、分片工具参数、权限、取消和持久预算。新阶段真实模型验收已通过 12 个用例，覆盖简单问答、教学 Skill、复习范围与续接、出题、临时偏好及已解析资料的引用与注入防护，详见 [教学执行验收](docs/Agent教学执行验收-2026-11-04.md)。第 4 部分的六种格式、ZIP 目录选择、取消/错误、缓存隔离与真实模型闭环结果见 [本地资料闭环验收](docs/本地资料闭环验收-2026-11-04.md)。
 
 实现依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/) 与 [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/)。
+
+## 本地资料使用与验收
+
+在当前对话的“本地资料”中导入 TXT、Markdown、文本 PDF、DOCX、PPTX；ZIP 先勾选目录条目，再解析。文件仅在浏览器 Worker 中处理，缓存文本与元数据，不保存原始文件。导入不调用模型；发送问题后仅检索选中资料并提交必要片段。点来源按钮可查看真实页码、幻灯片或段落，并切换缓存文本块。
+
+单文件 20MB；ZIP 展开最多 100MB、200 条，禁止嵌套压缩包，不支持加密、多卷和 ZIP64。每会话最多 20 份资料；每份最多 200 万字、1000 文本块，PDF/PPTX 最多 1000 页/张。DOCX 不推测页码，扫描件不做 OCR；公式对象、图表与复杂布局可能无法完整提取，界面会展示解析警告。导入超时两分钟可重新选择或拆分文件，停止导入会终止 Worker。
+
+生产构建会复制 PDF.js 的本地 CMap 和标准字体；部署时须同步完整 dist（包括 assets 和 pdfjs）。首次使用需加载解析资源，已导入的文本可离线查看。
+
+生产产物回归：先 npm run build，再设置 TEST_PRODUCTION=1 并运行 npm run test:e2e。真实付费资料闭环验收需已有 18085 SSH 转发和本地 .env.internal 内部访问口令，设置 RUN_LIVE_MATERIALS=1，执行 npx playwright test --config playwright.live.config.ts。该验收使用自编材料和独立浏览器上下文，结果在 .preflight/materials-live.json。

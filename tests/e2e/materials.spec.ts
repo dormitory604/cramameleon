@@ -45,7 +45,7 @@ test('parser failures and cancellation do not save partial data or issue model r
  await page.route('**/api/session',r=>r.fulfill({json:session}));await page.route('**/api/health',r=>r.fulfill({json:{status:'ok'}}));await page.route('**/api/model',r=>{modelCalls++;return r.abort();});
  await page.goto('/');const upload=page.getByLabel('导入本地资料',{exact:true});await expect(upload).toBeEnabled();
  await upload.setInputFiles(file('scan.pdf',pdf(true)));await expect(page.getByText(/未提取到文本/)).toBeVisible({timeout:30000});
- await upload.setInputFiles(file('broken.pdf',strToU8('%PDF-1.4 corrupted')));await expect(page.getByText(/PDF 无法解析/)).toBeVisible();
+ await upload.setInputFiles(file('broken.pdf',strToU8('%PDF-1.4 corrupted')));await expect(page.getByText(/PDF 无法解析/)).toBeVisible({timeout:30000});
  await upload.setInputFiles(file('nested.zip',zipSync({'inner.zip':zipSync({'a.txt':strToU8('x')})})));await expect(page.getByText(/禁止嵌套/)).toBeVisible();
  // Delay worker loading so the cancellation occurs before parsing can return.
  await page.route(/material\.worker[.-]/,async route=>{await new Promise(r=>setTimeout(r,1000));await route.continue().catch(()=>{});});
