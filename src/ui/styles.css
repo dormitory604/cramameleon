@@ -23,16 +23,7 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
 }
-/* 主题：默认跟随系统；html[data-theme] 为用户手动选择的浅色 / 深色。深色为同一暖色系的推演。 */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #1b1a18; --sidebar: #151412; --panel: #24221f; --hover: #2e2b27; --active: #3f3a33;
-    --border: #36322c; --text: #faf6ee; --muted: #b8ae9f; --faint: #908577;
-    --accent: #6fb081; --accent-text: #0d2418; --user-bubble: #2e2b27; --code-bg: #201e1b;
-    --ok: #6fb081; --ok-bg: #143424; --bad: #f08a96; --bad-bg: #3a1519; --warn: #ff9a48; --link: #a4bcd3;
-    color-scheme: dark;
-  }
-}
+/* 默认浅色；仅在用户明确选择深色时覆盖暖色主题。 */
 :root[data-theme="dark"] {
   --bg: #1b1a18; --sidebar: #151412; --panel: #24221f; --hover: #2e2b27; --active: #3f3a33;
   --border: #36322c; --text: #faf6ee; --muted: #b8ae9f; --faint: #908577;
@@ -92,7 +83,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .topbar { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--border); flex: none; }
 .topbar-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .topbar-title strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.theme-toggle { flex: none; font-size: 16px; }
+.theme-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; padding: 0 10px; font-size: 13px; }
+.theme-toggle span { font-size: 16px; }
 .topbar-title span { color: var(--faint); font-size: 12.5px; white-space: nowrap; }
 .chat { flex: 1; overflow-y: auto; min-height: 0; }
 .chat-inner { max-width: 760px; margin: 0 auto; padding: 24px 20px 12px; display: flex; flex-direction: column; gap: 20px; }
