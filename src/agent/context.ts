@@ -7,8 +7,10 @@ export function actionText(action: AgentAction): string {
     case 'confirm_materials': return '我确认选择这些资料：' + action.ids.join('、');
   }
 }
+export const HISTORY_MAX_CHARS = 12000;
+export const HISTORY_MAX_MESSAGES = 30;
 // Complete pairs only; retries exclude the original prompt and incomplete answer.
-export function buildHistory(messages: ChatMessage[], sessionId: string, retryUserId?: string, maxChars = 12000): HistoryMessage[] {
+export function buildHistory(messages: ChatMessage[], sessionId: string, retryUserId?: string, maxChars = HISTORY_MAX_CHARS): HistoryMessage[] {
   const current = messages.filter(m => m.conversationId === sessionId);
   const pairs: HistoryMessage[][] = [];
   let user: ChatMessage | undefined;
@@ -25,7 +27,7 @@ export function buildHistory(messages: ChatMessage[], sessionId: string, retryUs
   let size = 0;
   for (const pair of pairs.reverse()) {
     const length = pair.reduce((n, m) => n + m.text.length, 0);
-    if (size + length > maxChars || result.length >= 30) break;
+    if (size + length > maxChars || result.length >= HISTORY_MAX_MESSAGES) break;
     result.unshift(...pair); size += length;
   }
   return result;

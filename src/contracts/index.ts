@@ -7,7 +7,9 @@ export const TOOL_NAMES = ['present_quiz', 'read_skill', 'update_learning_state'
 export type ToolName = typeof TOOL_NAMES[number];
 export const isToolName = (name: unknown): name is ToolName => typeof name === 'string' && (TOOL_NAMES as readonly string[]).includes(name);
 export type LearningState = { preferences: string; progress: string; course?: string; chapter?: string; phase?: 'scope' | 'learning' | 'practice'; skill?: SkillName; skillVersions?: Partial<Record<SkillName, string>>; instructions?: string[]; quizPolicy?: 'allow' | 'avoid' };
-export type ChatMessage = { id: string; conversationId: string; createdAt: number; role: 'user' | 'assistant'; text: string; status?: RunStatus; logs?: string[]; modelRequests?: number; toolCalls?: number; quiz?: Quiz; selectedOption?: string; revealed?: boolean; sources?: Source[]; error?: string; errorCode?: string; replyTo?: string };
+export type ChatMessage = { id: string; conversationId: string; createdAt: number; role: 'user' | 'assistant'; text: string; status?: RunStatus; logs?: string[]; modelRequests?: number; toolCalls?: number; quiz?: Quiz; selectedOption?: string; revealed?: boolean; sources?: Source[]; error?: string; errorCode?: string; replyTo?: string;
+  // Material ids selected when this turn was submitted (#6); undefined on records saved before turn scopes existed.
+  selectedMaterialIds?: string[] };
 export type HistoryMessage = { role: 'user' | 'assistant'; text: string };
 export type MaterialCandidate = { id: string; title: string; kind: 'material' | 'package'; url?: string };
 export type Document = { id: string; title: string; chunks: Source[]; warnings: string[]; kind?: 'material' | 'past_paper'; format?: string; size?: number; importedAt?: number; fingerprint?: string; origin?: 'local' };
