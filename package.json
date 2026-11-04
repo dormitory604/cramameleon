@@ -9,13 +9,16 @@
     "build": "tsc --noEmit && vite build",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "test:e2e": "playwright test",
-    "predev": "node scripts/build-teaching.mjs",
+    "predev": "node scripts/build-teaching.mjs && node scripts/copy-pdf-assets.mjs",
     "pretest": "node scripts/build-teaching.mjs",
-    "prebuild": "node scripts/build-teaching.mjs"
+    "prebuild": "node scripts/build-teaching.mjs && node scripts/copy-pdf-assets.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.0",
     "@earendil-works/pi-ai": "1.5.0",
+    "fast-xml-parser": "5.12.0",
+    "fflate": "0.8.3",
+    "pdfjs-dist": "6.5.438",
     "react": "19.2.5",
     "react-dom": "19.2.5"
   },
@@ -26,6 +29,6 @@
     "@vitejs/plugin-react": "6.0.1",
     "fake-indexeddb": "^6.2.7",
     "typescript": "5.9.3",
-    "vite": "8.0.10"
+    "vite": "8.3.5"
   }
 }

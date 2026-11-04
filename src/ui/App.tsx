@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentAction, AppSession, ChatMessage, LearningState, Source } from '../contracts/index.ts';
+import type { AgentAction, AppSession, ChatMessage, LearningState, MaterialScope, Source } from '../contracts/index.ts';
+import { Materials } from './Materials.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildHistory } from '../agent/context.ts';
 import { loadData, saveData } from '../session/appStore.ts';
@@ -24,6 +25,8 @@ export function App() {
   const [appSession, setAppSession] = useState<AppSession | null>(null);
   const [accessToken, setAccessToken] = useState('');
   const [states, setStates] = useState<Record<string, LearningState>>({});
+  const [materials, setMaterials] = useState<Record<string, MaterialScope>>({});
+  const [importing, setImporting] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
@@ -43,12 +46,17 @@ export function App() {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const latestMessages = useRef(messages);
   const latestStates = useRef(states);
+  const latestMaterials = useRef(materials);
+  latestMaterials.current = materials;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   latestMessages.current = messages;
   latestStates.current = states;
 
   const conversations = useMemo(() => {
     const map = new Map<string, { id: string; title: string; updatedAt: number; running: boolean; count: number }>();
+    for (const [id, scope] of Object.entries(materials)) {
+      if(scope.documents.length) map.set(id, { id, title: scope.documents[0].title, updatedAt: scope.documents[0].importedAt ?? 0, running: false, count: 0 });
+    }
     for (const message of messages) {
       const id = message.conversationId ?? LEGACY_ID;
       const entry = map.get(id) ?? { id, title: '', updatedAt: 0, running: false, count: 0 };
@@ -59,10 +67,12 @@ export function App() {
       map.set(id, entry);
     }
     return [...map.values()].map(item => ({ ...item, title: item.title || '新对话' })).sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [messages]);
+  }, [messages, materials]);
   const visibleConversations = conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase()));
   const current = messages.filter(message => (message.conversationId ?? LEGACY_ID) === conversationId);
   const currentTitle = conversations.find(item => item.id === conversationId)?.title ?? '新对话';
+  const sourceDocument = source ? materials[conversationId]?.documents.find(d=>d.id===source.documentId) : undefined;
+  const cachedSource = sourceDocument?.chunks.find(c=>c.chunkId===source?.chunkId) ?? source;
 
   async function refreshHealth() {
     try { const response = await fetch('/api/health'); if (!response.ok) throw new Error(); setHealth(await response.json()); }
@@ -82,11 +92,13 @@ export function App() {
       if (!live) return;
       const list = saved.messages;
       setStates(saved.states);
+      setMaterials(saved.materials ?? {});
       setStorageReady(true);
       setMessages(list);
       setStorageStatus('已恢复本机记录');
       const latest = [...list].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
       if (latest) setConversationId(latest.conversationId ?? LEGACY_ID);
+      else { const id=Object.keys(saved.materials ?? {}).find(id=>saved.materials![id].documents.length);if(id)setConversationId(id); }
     }).catch(() => { if (live) setStorageStatus('本机存储不可用，刷新后记录将丢失'); }).finally(() => { if (live) setLoaded(true); });
     return () => { live = false; };
   }, [authenticated, appSession?.user.id]);
@@ -95,9 +107,9 @@ export function App() {
     if (saveTimer.current) return;
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null;
-      void saveData(appSession.user.id, { version: 2, messages: latestMessages.current, states: latestStates.current }).then(() => setStorageStatus('已保存到当前浏览器')).catch(() => setStorageStatus('保存失败，刷新后可能丢失记录'));
+      void saveData(appSession.user.id, { version: 2, messages: latestMessages.current, states: latestStates.current, materials: latestMaterials.current }).then(() => setStorageStatus('已保存到当前浏览器')).catch(() => setStorageStatus('保存失败，刷新后可能丢失记录'));
     }, 200);
-  }, [messages, states, loaded, storageReady, authenticated, appSession?.user.id]);
+  }, [messages, states, materials, loaded, storageReady, authenticated, appSession?.user.id]);
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'instant', block: 'end' }); }, [messages, conversationId]);
   useEffect(() => {
     const el = textarea.current;
@@ -121,7 +133,7 @@ export function App() {
     setMessages(previous => previous.map(message => message.id === id ? change(message) : message));
   }
   async function run(text: string, retryMessage?: UiMessage, action?: AgentAction) {
-    if (!text.trim() || active.current || !loaded || !appSession?.modelReady) return;
+    if (!text.trim() || importing || active.current || !loaded || !appSession?.modelReady) return;
     const id = crypto.randomUUID();
     const controller = new AbortController();
     const now = Date.now();
@@ -132,7 +144,7 @@ export function App() {
       ...(!retryMessage ? [{ id: userMessageId, role: 'user' as const, text: text.trim(), conversationId, createdAt: now }] : []),
       { id, replyTo: userMessageId, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, conversationId, createdAt: now + 1 }]);
     try {
-      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents: [], state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
+      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents: (materials[conversationId]?.documents ?? []).filter(d=>materials[conversationId]?.selectedIds.includes(d.id)), state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
         if (active.current?.id !== id || event.turnId !== id || event.sessionId !== conversationId) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         if (event.type === 'state_update') { setStates(previous => ({ ...previous, [conversationId]: event.state })); continue; }
@@ -173,18 +185,20 @@ export function App() {
     if (prompt?.role === 'user') void run(prompt.text, { ...message, replyTo: prompt.id });
   }
   function newConversation() {
-    if (busy) return;
+    if (busy || importing) return;
     setConversationId(crypto.randomUUID()); setInput(''); setNotice(''); setSidebarOpen(false);
     setTimeout(() => textarea.current?.focus(), 0);
   }
   function openConversation(id: string) {
-    if (busy) return;
+    if (busy || importing) return;
     setConversationId(id); setNotice(''); setSidebarOpen(false);
   }
   function deleteConversation(id: string) {
-    if (busy) return;
+    if (busy || importing) return;
     setMessages(previous => previous.filter(message => (message.conversationId ?? LEGACY_ID) !== id));
     setStates(previous => { const next = { ...previous }; delete next[id]; return next; });
+    setMaterials(previous => { const next = { ...previous }; delete next[id]; return next; });
+    setSource(null);
     if (id === conversationId) setConversationId(crypto.randomUUID());
   }
 
@@ -206,29 +220,29 @@ export function App() {
         <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭侧边栏">×</button>
       </div>
-      <button className="new-chat" onClick={newConversation} disabled={busy}><span>＋</span>新对话</button>
+      <button className="new-chat" onClick={newConversation} disabled={busy || importing}><span>＋</span>新对话</button>
       <input className="search" placeholder="搜索对话" value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索对话"/>
       <div className="sidebar-label">对话</div>
       <nav className="conversation-list">
         {!visibleConversations.length && <div className="list-empty">{query ? '没有匹配的对话' : '还没有对话'}</div>}
         {visibleConversations.map(item => <div key={item.id} className={`conversation-item ${item.id === conversationId ? 'active' : ''}`}>
-          <button className="conversation-main" disabled={busy && item.id !== conversationId} onClick={() => openConversation(item.id)}>
+          <button className="conversation-main" disabled={(busy || importing) && item.id !== conversationId} onClick={() => openConversation(item.id)}>
             <span className="conversation-title">{item.running && <span className="running-dot"/>}{item.title}</span>
             <span className="conversation-meta">{relativeTime(item.updatedAt)} · {item.count} 条</span>
           </button>
-          <button className="conversation-delete" disabled={busy} onClick={() => deleteConversation(item.id)} aria-label={`删除对话 ${item.title}`} title="删除">×</button>
+          <button className="conversation-delete" disabled={busy || importing} onClick={() => deleteConversation(item.id)} aria-label={`删除对话 ${item.title}`} title="删除">×</button>
         </div>)}
       </nav>
       <div className="sidebar-footer">
         <span className={`status-dot ${health?.status === 'ok' ? 'online' : 'offline'}`}/>
         <span>{health?.status === 'ok' ? '服务在线' : '后端待检查'}</span>
         <small>{storageStatus}</small>
-        <button className="icon-button" disabled={busy} onClick={async () => {
+        <button className="icon-button" disabled={busy || importing} onClick={async () => {
           if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
           try {
-            if (appSession && loaded && storageReady) await saveData(appSession.user.id, { version: 2, messages: latestMessages.current, states: latestStates.current });
+            if (appSession && loaded && storageReady) await saveData(appSession.user.id, { version: 2, messages: latestMessages.current, states: latestStates.current, materials: latestMaterials.current });
             const response = await fetch('/api/logout', { method: 'POST' }); if (!response.ok && response.status !== 401) throw new Error('退出失败');
-            setAuthenticated(false); setAppSession(null); setMessages([]); setStates({}); setLoaded(false);
+            setAuthenticated(false); setAppSession(null); setMessages([]); setStates({}); setMaterials({}); setSource(null); setLoaded(false);
           } catch { setNotice('保存或退出失败，请稍后重试'); }
         }}>退出</button>
       </div>
@@ -270,9 +284,9 @@ export function App() {
               {!!message.sources?.length && <div className="sources">{message.sources.map(item => <button key={item.documentId + ':' + item.chunkId} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
               {message.status !== 'running' && <div className="msg-actions">
                 <button onClick={() => void copy(message)} disabled={!message.text}>{copiedId === message.id ? '已复制' : '复制'}</button>
-                {index === current.length - 1 && message.quiz && message.revealed && ['completed','waiting'].includes(message.status ?? '') && <button disabled={busy} onClick={() => void run('请出下一题。', undefined, { type: 'next_question' })}>下一题</button>}
-                {index === current.length - 1 && !message.quiz && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={busy} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
-                {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={busy} onClick={() => retry(message)}>重试</button>}
+                {index === current.length - 1 && message.quiz && message.revealed && ['completed','waiting'].includes(message.status ?? '') && <button disabled={busy || importing} onClick={() => void run('请出下一题。', undefined, { type: 'next_question' })}>下一题</button>}
+                {index === current.length - 1 && !message.quiz && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={busy || importing} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
+                {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={busy || importing} onClick={() => retry(message)}>重试</button>}
               </div>}
             </article>)}
           <div ref={bottom}/>
@@ -282,21 +296,22 @@ export function App() {
       <footer className="composer-wrap">
         {!appSession?.modelReady && <div role="alert" className="notice">模型尚未配置。请在服务器环境文件填写真实 API 密钥并重启服务。</div>}
         {appSession && <div className="composer-hint">北京时间今日 token：{appSession.budget.used.toLocaleString()} / {appSession.budget.limit.toLocaleString()}（含预留）</div>}
-        <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
+        <Materials key={conversationId} scope={materials[conversationId] ?? {documents:[],selectedIds:[]}} disabled={busy || importing || !loaded} onBusy={setImporting} onSource={setSource} onChange={scope=>setMaterials(previous=>({...previous,[conversationId]:scope}))}/>
+        <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy || importing} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {notice && <div role="alert" className="notice">{notice}</div>}
         <form className="composer" onSubmit={event => { event.preventDefault(); void run(input); }}>
           <label className="sr-only" htmlFor="message-input">输入消息</label>
-          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={input} disabled={busy || !loaded || !appSession?.modelReady} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
+          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={input} disabled={busy || importing || !loaded || !appSession?.modelReady} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
           <div className="composer-bar">
             <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-            {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={!input.trim() || !loaded || !appSession?.modelReady} aria-label="发送消息">↑</button>}
+            {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={importing || !input.trim() || !loaded || !appSession?.modelReady} aria-label="发送消息">↑</button>}
           </div>
         </form>
       </footer>
     </main>
 
-    {source && <div className="modal-backdrop" onClick={() => setSource(null)}><section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title" onClick={event => event.stopPropagation()}><button className="icon-button modal-close" onClick={() => setSource(null)} aria-label="关闭来源">×</button><div className="eyebrow">来源</div><h2 id="source-title">{source.title}</h2><p className="source-location">{source.location}</p><pre>{source.text}</pre></section></div>}
+    {source && <div className="modal-backdrop" onClick={() => setSource(null)}><section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title" onClick={event => event.stopPropagation()}><button className="icon-button modal-close" onClick={() => setSource(null)} aria-label="关闭来源">×</button><div className="eyebrow">来源</div><h2 id="source-title">{source.title}</h2><p className="source-location">{source.location}</p><pre>{cachedSource?.text}</pre>{sourceDocument && <label>文本位置<select aria-label="文本位置" value={source.chunkId} onChange={e=>{const chunk=sourceDocument.chunks.find(c=>c.chunkId===e.target.value);if(chunk)setSource(chunk);}}>{sourceDocument.chunks.map(c=><option key={c.chunkId} value={c.chunkId}>{c.location}</option>)}</select></label>}</section></div>}
   </div>;
 }
-// TODO(ui): Course/material selection,  full accessibility pass.
+// TODO(ui): Full accessibility pass.
 // TODO(auth): Replace internal-only access with old-site one-time authorization code exchange.
