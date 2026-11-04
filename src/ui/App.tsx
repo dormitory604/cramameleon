@@ -8,10 +8,34 @@ import { buildHistory } from '../agent/context.ts';
 import { loadData, saveData } from '../session/appStore.ts';
 
 // UI consumes business events only; the Agent owns model/tool scheduling.
-type UiMessage = ChatMessage;
+type UiMessage = ChatMessage & { selectedMaterialIds?: string[] };
 type Health = { status: string; stats?: { active: number; requests: number; completed: number; cancelled: number } };
 const statusText: Record<string, string> = { running: '运行中', completed: '已完成', cancelled: '已停止', failed: '失败', limited: '达到上限', interrupted: '已中断', waiting: '等待你的选择' };
 const LEGACY_ID = 'legacy';
+
+// Select complete turns at A's submission boundary; visible records remain intact.
+function scopedMessages(messages: UiMessage[], conversationId: string, selectedIds: string[], retryUserId?: string): UiMessage[] {
+  const selected = new Set(selectedIds);
+  const current = messages.filter(message => (message.conversationId ?? LEGACY_ID) === conversationId);
+  // Older records have no turn scope. Treat their known citations as one scope,
+  // including uncited follow-ups that may paraphrase those same materials.
+  const legacyScope = [...new Set(current.filter(message => message.selectedMaterialIds === undefined)
+    .flatMap(message => [...message.sources ?? [], ...message.quiz?.sources ?? []].map(source => source.documentId)))];
+  const compatible = (message: UiMessage) => {
+    const scope = message.selectedMaterialIds ?? legacyScope;
+    return scope.length === selected.size && scope.every(id => selected.has(id));
+  };
+  const result: UiMessage[] = [];
+  let user: UiMessage | undefined;
+  for (const message of current) {
+    if (message.id === retryUserId) break;
+    if (message.role === 'user') { user = message; continue; }
+    if (!user) continue;
+    if (compatible(user) && compatible(message)) result.push(user, message);
+    user = undefined;
+  }
+  return result;
+}
 
 function relativeTime(time?: number) {
   if (!time) return '';
@@ -139,13 +163,15 @@ export function App() {
     const controller = new AbortController();
     const now = Date.now();
     const userMessageId = retryMessage?.replyTo ?? crypto.randomUUID();
-    const history = buildHistory(messages, conversationId, retryMessage ? userMessageId : undefined);
+    const documents = (materials[conversationId]?.documents ?? []).filter(d => materials[conversationId]?.selectedIds.includes(d.id));
+    const selectedMaterialIds = documents.map(d => d.id);
+    const history = buildHistory(scopedMessages(messages, conversationId, selectedMaterialIds, retryMessage ? userMessageId : undefined), conversationId);
     active.current = { id, controller }; setBusy(true); setInput(''); setNotice('');
-    setMessages(previous => [...previous.filter(m => m.id !== retryMessage?.id),
-      ...(!retryMessage ? [{ id: userMessageId, role: 'user' as const, text: text.trim(), conversationId, createdAt: now }] : []),
-      { id, replyTo: userMessageId, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, conversationId, createdAt: now + 1 }]);
+    setMessages(previous => [...previous.filter(m => m.id !== retryMessage?.id).map(m => m.id === userMessageId ? { ...m, selectedMaterialIds } : m),
+      ...(!retryMessage ? [{ id: userMessageId, role: 'user' as const, text: text.trim(), conversationId, createdAt: now, selectedMaterialIds }] : []),
+      { id, replyTo: userMessageId, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, conversationId, createdAt: now + 1, selectedMaterialIds }]);
     try {
-      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents: (materials[conversationId]?.documents ?? []).filter(d=>materials[conversationId]?.selectedIds.includes(d.id)), state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
+      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents, state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
         if (active.current?.id !== id || event.turnId !== id || event.sessionId !== conversationId) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         if (event.type === 'state_update') { setStates(previous => ({ ...previous, [conversationId]: event.state })); continue; }
