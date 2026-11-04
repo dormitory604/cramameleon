@@ -145,6 +145,7 @@ for (const [code, message] of [
   ['NETWORK_ERROR', '网络连接失败，请检查网络或 SSH 转发后重试。'],
   ['MODEL_STREAM_INTERRUPTED', '回答传输中断，已保留收到的内容。请重试。'],
   ['BUDGET_EXCEEDED', '今日模型额度不足，请等待北京时间次日额度恢复后重试。正在进行的请求也会占用额度。'],
+  ['TOTAL_BUDGET_EXCEEDED', '全站模型额度已用完，暂时无法继续提问。'],
   ['CONCURRENCY_LIMIT', '当前请求过多或上一请求仍在结束，请稍后重试。'],
   ['MODEL_NOT_CONFIGURED', '模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。'],
 ]) {
@@ -329,24 +330,25 @@ test.describe('mobile recovery', () => {
     await page.route('**/api/internal/session', r => r.fulfill({ json: session }));
     await page.getByLabel('导入本地资料', { exact: true }).setInputFiles({ name: 'mobile.txt', mimeType: 'text/plain', buffer: Buffer.from('手机恢复的学习资料') });
     await expect(page.getByLabel('使用资料 mobile.txt', { exact: true })).toBeChecked();
-    await page.getByText('当前对话偏好', { exact: true }).click();
-    await page.getByPlaceholder('例如：回答简短，不主动出题').fill('回答简短');
+    await send(page, '回答简短');
+    await emit(page, 0, [{ type: 'text_delta', delta: '好的' }, { type: 'finish', stopReason: 'stop' }], true);
+    await expect(page.getByLabel('输入消息')).toBeEnabled();
     await send(page, '手机问题');
-    await emit(page, 0, [{ type: 'text_delta', delta: '手机上保留的内容' }]);
+    await emit(page, 1, [{ type: 'text_delta', delta: '手机上保留的内容' }]);
     await expect(page.getByText('手机上保留的内容', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '停止', exact: true }).click();
     await expect(page.getByLabel('输入消息')).toBeEnabled();
     await send(page, '应用会话过期');
-    await emit(page, 1, [{ type: 'error', code: 'AUTH_REQUIRED', message: 'expired' }], true);
+    await emit(page, 2, [{ type: 'error', code: 'AUTH_REQUIRED', message: 'expired' }], true);
     await expect(page.getByLabel('内部访问口令')).toBeVisible();
     await enterWithToken(page, 'test-token');
     await expect(page.getByText('手机上保留的内容', { exact: true })).toBeVisible();
     await expect(page.getByText('已停止', { exact: true })).toBeVisible();
     await expect(page.getByLabel('使用资料 mobile.txt', { exact: true })).toBeChecked();
-    await page.getByText('当前对话偏好', { exact: true }).click();
-    await expect(page.getByPlaceholder('例如：回答简短，不主动出题')).toHaveValue('回答简短');
     await page.getByRole('button', { name: '重试', exact: true }).click();
-    await emit(page, 2, [{ type: 'text_delta', delta: '手机恢复成功' }, { type: 'finish', stopReason: 'stop' }], true);
+    await emit(page, 3, [{ type: 'text_delta', delta: '手机恢复成功' }, { type: 'finish', stopReason: 'stop' }], true);
+    const retry = await page.evaluate(() => (window as any).modelCalls[3].body);
+    expect(retry.messages[0].content).toContain('"instructions":["回答简短"]');
     await expect(page.getByText('手机恢复成功', { exact: true })).toBeVisible();
     await page.waitForTimeout(350);
     await page.reload();

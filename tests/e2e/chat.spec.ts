@@ -55,7 +55,24 @@ test('missing key disables send and clearly explains setup',async({page})=>{
  await page.goto('/');await expect(page.getByRole('alert')).toContainText('模型尚未配置');await expect(page.getByRole('button',{name:'重新检查模型状态',exact:true})).toBeVisible();await expect(page.getByLabel('输入消息')).toBeDisabled();await expect(page.getByRole('button',{name:'发送消息',exact:true})).toBeDisabled();
 });
 
-test('learning scope and chapter survive reload and preference editing',async({page})=>{
+test('guest opens the chat and sends a message without a password', async ({ page }) => {
+ await page.route('**/api/session', route => route.fulfill({ json: { ...session, mode: 'guest' } }));
+ await page.route('**/api/health', route => route.fulfill({ json: { status: 'ok' } }));
+ await page.route('**/api/model', route => {
+  const { requestId } = route.request().postDataJSON();
+  const events = [{ type: 'start', requestId }, { type: 'text_delta', delta: '你好，访客。' }, { type: 'finish', stopReason: 'stop' }];
+  return route.fulfill({ contentType: 'text/event-stream', body: events.map(event => 'data: ' + JSON.stringify(event) + '\n\n').join('') });
+ });
+ await page.goto('/');
+ await expect(page.getByRole('heading', { name: '今天想学点什么？' })).toBeVisible();
+ await page.getByLabel('输入消息').fill('你好');
+ await expect(page.getByLabel('内部访问口令')).toHaveCount(0);
+ await expect(page.getByRole('button', { name: '退出', exact: true })).toHaveCount(0);
+ await page.getByRole('button', { name: '发送消息', exact: true }).click();
+ await expect(page.getByText('你好，访客。', { exact: true })).toBeVisible();
+});
+
+test('learning scope and chapter survive reload with a simplified composer',async({page})=>{
  let count=0;
  await page.route('**/api/session',r=>r.fulfill({json:session}));
  await page.route('**/api/health',r=>r.fulfill({json:{status:'ok'}}));
@@ -72,6 +89,8 @@ test('learning scope and chapter survive reload and preference editing',async({p
  await expect(page.getByLabel('学习位置')).toContainText('概率论');await expect(page.getByText('等待你的选择')).toBeVisible();
  await page.getByLabel('输入消息').fill('我选条件概率');await page.getByRole('button',{name:'发送消息',exact:true}).click();
  await expect(page.getByLabel('学习位置')).toContainText('条件概率');await expect(page.getByRole('button',{name:'继续学习',exact:true})).toBeVisible();
- await page.getByText('当前对话偏好',{exact:true}).click();await page.getByPlaceholder('例如：回答简短，不主动出题').fill('回答简短');
- await page.waitForTimeout(350);await page.reload();await expect(page.getByLabel('学习位置')).toContainText('条件概率');
+ await expect(page.getByText('当前对话偏好',{exact:true})).toHaveCount(0);
+ await expect(page.getByText('北京时间今日 token：',{exact:false})).toHaveCount(0);
+ await expect(page.getByRole('status',{name:'本机存储状态'})).toHaveText('已保存到当前浏览器');
+ await page.reload();await expect(page.getByLabel('学习位置')).toContainText('条件概率');
 });

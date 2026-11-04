@@ -194,14 +194,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   .conversation-delete { opacity: 1; width: 32px; height: 32px; }
 }
 
-/* Auth */
-.auth-screen { min-height: 100%; display: grid; place-items: center; padding: 16px; background: var(--sidebar); }
-.auth-card { width: 100%; max-width: 380px; padding: 32px 28px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel); display: flex; flex-direction: column; gap: 12px; }
-.auth-card h1 { margin: 12px 0 0; font-size: 22px; }
-.auth-card p { margin: 0; color: var(--muted); }
-.auth-card small { color: var(--faint); font-size: 12px; text-align: center; }
-.auth-card .notice { margin: 0; }
-.primary-button { margin-top: 8px; padding: 10px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 500; }
+.access-form { display: flex; gap: 8px; align-items: center; }
+.access-form .search { min-width: 0; margin: 0; }
+.primary-button { flex: none; padding: 8px 10px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 500; }
 
 /* Modal */
 .source-modal { width: calc(100% - 32px); max-width: 560px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 14px; background: var(--panel); color: var(--text); border: 1px solid var(--border); }

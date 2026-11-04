@@ -1,28 +1,37 @@
-import { memo } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import { memo, useId, useMemo } from 'react';
+import MarkdownIt from 'markdown-it';
+import { footnote } from '@mdit/plugin-footnote';
+import { katex } from '@mdit/plugin-katex';
+import { tasklist } from '@mdit/plugin-tasklist';
 
-// 模型常输出 \( … \) / \[ … \] 形式的公式，remark-math 只识别 $ / $$，这里在代码块之外做转换。
-function normalizeMath(text: string): string {
-  return text.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/g).map((part, index) => index % 2 === 1 ? part : part
-    .replace(/\\\[([\s\S]+?)\\\]/g, (_, body: string) => `\n$$\n${body.trim()}\n$$\n`)
-    .replace(/\\\(([\s\S]+?)\\\)/g, (_, body: string) => `$${body.trim()}$`)).join('');
-}
+const markdown = MarkdownIt({ html: false, linkify: true })
+  .use(katex, { delimiters: 'all', throwOnError: false, logger: () => 'ignore' as const, trust: false })
+  .use(footnote)
+  .use(tasklist, { containerClass: 'contains-task-list' });
 
-const components: Components = {
-  a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
-  table: ({ node: _node, ...props }) => <div className="md-table"><table {...props} /></div>,
+markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
+  if (env?.inline) return '';
+  tokens[index].attrSet('target', '_blank');
+  tokens[index].attrSet('rel', 'noopener noreferrer');
+  return renderer.renderToken(tokens, index, options);
 };
-// 行内场景（如题目选项）不允许段落等块级元素，避免在 button 内产生非法嵌套。
-const inlineComponents: Components = { ...components, p: ({ node: _node, ...props }) => <span {...props} /> };
-const remarkPlugins = [remarkGfm, remarkMath];
-const rehypePlugins: any[] = [[rehypeKatex, { throwOnError: false, strict: false }]];
+markdown.renderer.rules.link_close = (tokens, index, options, env, renderer) =>
+  env?.inline ? '' : renderer.renderToken(tokens, index, options);
+const renderFootnoteRef = markdown.renderer.rules.footnote_ref!;
+markdown.renderer.rules.footnote_ref = (tokens, index, options, env, renderer) =>
+  env?.inline ? '' : renderFootnoteRef(tokens, index, options, env, renderer);
+markdown.renderer.rules.table_open = (tokens, index, options, _env, renderer) =>
+  '<div class="md-table">' + renderer.renderToken(tokens, index, options);
+markdown.renderer.rules.table_close = (tokens, index, options, _env, renderer) =>
+  renderer.renderToken(tokens, index, options) + '</div>';
 
 export const Markdown = memo(function Markdown({ text, inline = false, streaming = false, className = '' }: { text: string; inline?: boolean; streaming?: boolean; className?: string }) {
+  const docId = useId();
+  // Quiz markup lives inside headings, paragraphs and buttons. Render only phrasing content there.
+  const markup = useMemo(() => ({
+    __html: inline ? markdown.renderInline(text, { inline }) : markdown.render(text, { docId }),
+  }), [text, inline, docId]);
   const Tag = inline ? 'span' : 'div';
-  return <Tag className={`markdown ${inline ? 'inline' : ''} ${streaming ? 'streaming' : ''} ${className}`}>
-    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={inline ? inlineComponents : components}>{normalizeMath(text)}</ReactMarkdown>
-  </Tag>;
+  return <Tag className={`markdown ${inline ? 'inline' : ''} ${streaming ? 'streaming' : ''} ${className}`}
+    dangerouslySetInnerHTML={markup} />;
 });

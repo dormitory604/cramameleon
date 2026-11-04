@@ -20,16 +20,23 @@ async function send(page:Page,text:string) {
  await page.getByLabel('输入消息').fill(text);await page.getByRole('button',{name:'发送消息',exact:true}).click();
  await expect(page.getByRole('button',{name:'停止',exact:true})).toHaveCount(0);
 }
+async function openMaterials(page:Page) {
+ await page.locator('.materials-panel > summary').click();
+}
 
 test('missing and unselected materials explain recovery; only checked files enter the actual request',async({page})=>{
  const requests=await setup(page,body=>body.messages.at(-1).role==='user'&&body.tools.some((tool:any)=>tool.function.name==='search_context')
   ?{type:'tool_call',id:'search',name:'search_context',arguments:{query:'条件概率'}}
   :{type:'text_delta',delta:'通用知识说明：条件概率需要条件事件的概率大于零。'});
- await expect(page.getByLabel('本轮资料范围')).toContainText('尚未导入资料');
- await expect(page.getByLabel('本轮资料范围')).toContainText('通用知识');
+ await expect(page.getByLabel('本轮资料范围')).toHaveCount(0);
+ const add=page.getByRole('button',{name:'添加',exact:true});
+ await add.click();
+ await expect(page.getByRole('button',{name:'添加文件',exact:true})).toBeVisible();
+ await add.press('Escape');
  const upload=page.getByLabel('导入本地资料',{exact:true});
  await upload.setInputFiles([file('讲义.txt','条件概率：P(B)>0 时才定义。'),file('私有笔记.md','# 条件概率\n\nUNSELECTED_BODY_6'),file('移除.txt','REMOVED_BODY_6')]);
  await expect(page.getByText('已导入 3 份资料。',{exact:true})).toBeVisible();
+ await openMaterials(page);
  await page.getByLabel('使用资料 私有笔记.md',{exact:true}).uncheck();
  await page.getByRole('button',{name:'移除：移除.txt',exact:true}).click();
  await expect(page.getByLabel('本轮资料范围')).toContainText('已选 1 份');
@@ -59,9 +66,10 @@ test('empty parsing offers recovery and partial PDF warnings survive cache brows
  await expect(page.getByText(/未提取到文本/)).toBeVisible({timeout:30000});
  await expect(page.getByLabel('导入恢复办法')).toContainText('重新导入');
  await expect(page.getByLabel('导入恢复办法')).toContainText('复制');
- await expect(page.getByLabel('本轮资料范围')).toContainText('尚未导入资料');
+ await expect(page.getByLabel('本轮资料范围')).toHaveCount(0);
  await upload.setInputFiles(pdfFile('部分课件.pdf',pdf(false,true)));
  await expect(page.getByLabel('使用资料 部分课件.pdf',{exact:true})).toBeChecked({timeout:30000});
+ await openMaterials(page);
  await page.getByRole('button',{name:'查看文本：部分课件.pdf',exact:true}).click();
  await expect(page.getByRole('dialog')).toContainText('1 页未提取到文字');
  await expect(page.getByRole('dialog')).toContainText('对照原文件');
@@ -69,6 +77,7 @@ test('empty parsing offers recovery and partial PDF warnings survive cache brows
  await page.getByRole('button',{name:'关闭来源'}).click();
  expect(requests).toHaveLength(0);
  await page.waitForTimeout(350);await page.reload();
+ await openMaterials(page);
  await page.getByRole('button',{name:'查看文本：部分课件.pdf',exact:true}).click();
  await expect(page.getByRole('dialog')).toContainText('1 页未提取到文字');
  await page.getByRole('button',{name:'关闭来源'}).click();
@@ -115,6 +124,7 @@ test('citations distinguish read excerpts from cached text and return keyboard f
  await expect(button).toBeFocused();
  expect(requests).toHaveLength(count);
  await expect(page.getByLabel('聊天记录')).not.toContainText('INJECTION_SUCCEEDED');
+ await openMaterials(page);
  await page.getByRole('button',{name:'移除：概率讲义.txt',exact:true}).click();
  await button.click();
  await expect(page.getByRole('dialog')).toContainText('缓存已移除或不可用');
@@ -147,6 +157,7 @@ for (const change of ['deselect', 'remove'] as const) test(`${change} and reload
  const continuity=JSON.stringify(requests[sameScope]);
  // #7 projects quiz sources by reference only (no cached text), so the quiz question marks quiz continuity here.
  for(const present of ['条件事件的概率须满足什么条件','QUOTED_ANSWER_SCOPE_6','用户作答：A'])expect(continuity).toContain(present);
+ await openMaterials(page);
  if(change==='deselect')await page.getByLabel('使用资料 原资料.txt',{exact:true}).uncheck();
  else await page.getByRole('button',{name:'移除：原资料.txt',exact:true}).click();
  // Save through the normal UI before reload; isolation must use persisted turn scope.
@@ -197,6 +208,7 @@ test('retry uses the current material scope and retains the retried turn after r
  await send(page,'再解释一次');
  expect(JSON.stringify(requests.at(-1))).toContain('QUOTED_PROSE_RETRY_6');
  await expect(page.getByRole('alert')).toContainText('暂时无法连接模型');
+ await openMaterials(page);
  await page.getByLabel('使用资料 旧讲义.txt',{exact:true}).uncheck();
  await page.waitForTimeout(350);await page.reload();
  await page.getByRole('button',{name:'重试',exact:true}).click();
@@ -258,6 +270,7 @@ test('mobile users browse real page, slide and paragraph positions without model
  const binary=(name:string,bytes:Uint8Array)=>({name,mimeType:'application/octet-stream',buffer:Buffer.from(bytes)});
  await page.getByLabel('导入本地资料',{exact:true}).setInputFiles([binary('课程.pdf',pdf()),binary('课件.pptx',pptx()),binary('讲义.docx',docx())]);
  await expect(page.getByText('已导入 3 份资料。',{exact:true})).toBeVisible({timeout:30000});
+ await openMaterials(page);
  for(const [name,first,second] of [['课程.pdf','第 1 页','第 2 页'],['课件.pptx','幻灯片 1','幻灯片 2'],['讲义.docx','段落 1','段落 2']]){
   const button=page.getByRole('button',{name:`查看文本：${name}`,exact:true});await button.click();
   const dialog=page.getByRole('dialog');await expect(dialog.locator('.source-location')).toHaveText(first);
@@ -278,7 +291,7 @@ test('missing-material controlled response has no source tools or fabricated cit
  for(const tool of ['search_context','cite_sources'])expect(requests[0].tools.some((item:any)=>item.function.name===tool)).toBe(false);
  await expect(page.getByLabel('聊天记录')).toContainText('无法确认本校考试范围');
  await expect(page.getByRole('button',{name:/^▧ /})).toHaveCount(0);
- await expect(page.getByLabel('本轮资料范围')).toContainText('尚未导入资料');
+ await expect(page.getByLabel('本轮资料范围')).toHaveCount(0);
 });
 
 test('ZIP partial failure retains only successful selected entries and offers another import',async({page})=>{
@@ -297,6 +310,7 @@ test('ZIP partial failure retains only successful selected entries and offers an
  await expect(page.getByLabel('使用资料 未选.txt',{exact:true})).toHaveCount(0);
  await expect(page.getByLabel('导入恢复办法')).toContainText('失败文件未加入');
  await expect(upload).toBeEnabled();
+ await openMaterials(page);
  await page.getByRole('button',{name:'查看文本：章节.txt',exact:true}).click();
  await expect(page.getByRole('dialog')).toContainText('P(B)>0');
  await page.getByRole('button',{name:'关闭来源'}).click();

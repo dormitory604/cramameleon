@@ -24,12 +24,14 @@ import (
 
 const contractVersion = "app.v1"
 const cookieName = "cram_session"
+const guestUserID = "guest/browser"
 
 type config struct {
 	bind, staticDir, dbPath, apiKey, model, accessToken, userID string
 	dailyBudget                                                 int64
 	maxOutput, maxInput                                         int
 	timeout                                                     time.Duration
+	allowGuest                                                  bool
 }
 type appServer struct {
 	cfg           config
@@ -69,10 +71,17 @@ func loadConfig() (config, error) {
 	if e != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		return c, fmt.Errorf("internal mode requires a loopback bind")
 	}
-	if len(c.accessToken) < 24 || strings.Contains(strings.ToLower(c.accessToken), "replace") {
+	switch os.Getenv("APP_ALLOW_GUEST") {
+	case "", "0":
+	case "1":
+		c.allowGuest = true
+	default:
+		return c, fmt.Errorf("APP_ALLOW_GUEST must be 0 or 1")
+	}
+	if !c.allowGuest && (len(c.accessToken) < 24 || strings.Contains(strings.ToLower(c.accessToken), "replace")) {
 		return c, fmt.Errorf("APP_ACCESS_TOKEN must be a random secret of at least 24 characters")
 	}
-	n, e := envInt("APP_DAILY_TOKEN_BUDGET", 100000)
+	n, e := envInt("APP_DAILY_TOKEN_BUDGET", 1_000_000)
 	if e != nil {
 		return c, e
 	}
@@ -99,6 +108,12 @@ func loadConfig() (config, error) {
 func (s *appServer) modelReady() bool {
 	return s.cfg.apiKey != "" && !strings.Contains(strings.ToLower(s.cfg.apiKey), "replace")
 }
+func (s *appServer) mode() string {
+	if s.cfg.allowGuest {
+		return "guest"
+	}
+	return "internal"
+}
 func fail(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code, "message": message}})
 }
@@ -120,12 +135,21 @@ func (s *appServer) session(c *gin.Context) {
 		fail(c, 503, "STORAGE_FAILED", "用量存储暂不可用")
 		return
 	}
-	c.JSON(200, gin.H{"mode": "internal", "user": gin.H{"id": s.cfg.userID, "name": "内部开发者"}, "modelReady": s.modelReady(), "model": s.cfg.model, "limits": gin.H{"maxToolCalls": 6, "timeoutSeconds": 120, "maxOutputTokens": s.cfg.maxOutput}, "budget": gin.H{"day": budgetDay(time.Now()), "limit": s.cfg.dailyBudget, "used": n}})
+	id, name := s.cfg.userID, "内部开发者"
+	if s.cfg.allowGuest {
+		id, name = guestUserID, "访客"
+	}
+	c.JSON(200, gin.H{"mode": s.mode(), "user": gin.H{"id": id, "name": name}, "modelReady": s.modelReady(), "model": s.cfg.model, "limits": gin.H{"maxToolCalls": 6, "timeoutSeconds": 120, "maxOutputTokens": s.cfg.maxOutput}, "budget": gin.H{"day": budgetDay(time.Now()), "limit": s.cfg.dailyBudget, "used": n}})
 }
 func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	s := &appServer{cfg: cfg, store: db, client: &http.Client{Timeout: cfg.timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: "https://api.deepseek.com/chat/completions", slots: make(chan struct{}, 2)}
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// Only a reverse proxy on the application host may supply the client address.
+	if e := r.SetTrustedProxies([]string{"127.0.0.0/8", "::1"}); e != nil {
+		panic(e)
+	}
+	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
 	r.Use(gin.Recovery())
 	r.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
@@ -144,9 +168,13 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 		c.Next()
 	})
 	r.GET("/api/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok", "mode": "internal", "contractVersion": contractVersion, "modelReady": s.modelReady(), "oldSite": false, "database": true})
+		c.JSON(200, gin.H{"status": "ok", "mode": s.mode(), "contractVersion": contractVersion, "modelReady": s.modelReady(), "oldSite": false, "database": true})
 	})
 	r.POST("/api/internal/session", func(c *gin.Context) {
+		if cfg.allowGuest {
+			fail(c, 404, "NOT_IMPLEMENTED", "访客模式无需访问口令")
+			return
+		}
 		s.loginMu.Lock()
 		defer s.loginMu.Unlock()
 		if time.Since(s.loginWindow) > time.Minute {
@@ -185,6 +213,12 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	})
 	api := r.Group("/api")
 	api.Use(func(c *gin.Context) {
+		if cfg.allowGuest {
+			c.Set("userID", guestUserID)
+			c.Set("clientKey", "guest/"+c.ClientIP())
+			c.Next()
+			return
+		}
 		token, e := c.Cookie(cookieName)
 		if e != nil {
 			fail(c, 401, "AUTH_REQUIRED", "请先输入内部访问口令")
@@ -201,6 +235,10 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	})
 	api.GET("/session", s.session)
 	api.POST("/logout", func(c *gin.Context) {
+		if cfg.allowGuest {
+			c.Status(204)
+			return
+		}
 		token, _ := c.Cookie(cookieName)
 		if _, e := db.db.Exec("DELETE FROM sessions WHERE token_hash=?", tokenHash(token)); e != nil {
 			fail(c, 503, "STORAGE_FAILED", "退出失败，请重试")

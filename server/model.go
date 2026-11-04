@@ -132,9 +132,9 @@ type providerChunk struct {
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		Input  int64 `json:"prompt_tokens"`
-		Output int64 `json:"completion_tokens"`
-		Total  int64 `json:"total_tokens"`
+		Input  *int64 `json:"prompt_tokens"`
+		Output *int64 `json:"completion_tokens"`
+		Total  *int64 `json:"total_tokens"`
 	} `json:"usage"`
 	Error json.RawMessage `json:"error"`
 }
@@ -160,11 +160,15 @@ func (s *appServer) model(c *gin.Context) {
 		return
 	}
 	user := c.GetString("userID")
-	if _, loaded := s.users.LoadOrStore(user, true); loaded {
+	clientKey := c.GetString("clientKey")
+	if clientKey == "" {
+		clientKey = user
+	}
+	if _, loaded := s.users.LoadOrStore(clientKey, true); loaded {
 		fail(c, 429, "CONCURRENCY_LIMIT", "上一请求仍在结束，请稍后重试")
 		return
 	}
-	defer s.users.Delete(user)
+	defer s.users.Delete(clientKey)
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
@@ -176,6 +180,8 @@ func (s *appServer) model(c *gin.Context) {
 	reserved := int64(len(body) + 4096 + s.cfg.maxOutput)
 	if e = s.store.reserve(v.RequestID, user, budgetDay(time.Now()), reserved, s.cfg.dailyBudget); e != nil {
 		switch {
+		case errors.Is(e, errTotalBudget):
+			fail(c, 429, "TOTAL_BUDGET_EXCEEDED", "全站累计 token 额度不足")
 		case errors.Is(e, errBudget):
 			fail(c, 429, "BUDGET_EXCEEDED", "今日全局 token 预算不足（包含正在进行请求的预留额度）")
 		case errors.Is(e, errDuplicate):
@@ -270,6 +276,7 @@ func (s *appServer) model(c *gin.Context) {
 	finish := ""
 	done := false
 	totalBytes := 0
+	reportedInput, reportedOutput := int64(-1), int64(-1)
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			break
@@ -295,12 +302,13 @@ func (s *appServer) model(c *gin.Context) {
 		}
 		if chunk.Usage != nil {
 			u := chunk.Usage
-			if u.Input < 0 || u.Output < 0 || u.Total != u.Input+u.Output {
+			if reportedInput >= 0 || u.Input == nil || u.Output == nil || u.Total == nil ||
+				*u.Input <= 0 || *u.Output < 0 || *u.Total < 0 || *u.Total != *u.Input+*u.Output {
 				protocolError("MODEL_PROTOCOL", "模型用量数据无效")
 				return
 			}
-			inputTokens = u.Input
-			outputTokens = u.Output
+			reportedInput = *u.Input
+			reportedOutput = *u.Output
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Index != 0 || finish != "" {
@@ -351,7 +359,7 @@ func (s *appServer) model(c *gin.Context) {
 		protocolError("MODEL_STREAM_INTERRUPTED", "模型连接提前关闭，请手动重试")
 		return
 	}
-	if inputTokens < 0 {
+	if reportedInput < 0 {
 		protocolError("MODEL_USAGE_MISSING", "模型未返回用量，本次保留预留额度，请检查服务")
 		return
 	}
@@ -398,6 +406,8 @@ func (s *appServer) model(c *gin.Context) {
 		protocolError("MODEL_PROTOCOL", "工具调用缺少正确终态")
 		return
 	}
+	// Only release unused reservations once the upstream stream is complete and valid.
+	inputTokens, outputTokens = reportedInput, reportedOutput
 	if !send(map[string]any{"type": "usage", "usage": map[string]int64{"input": inputTokens, "output": outputTokens, "total": inputTokens + outputTokens}}) {
 		status = "cancelled"
 		return

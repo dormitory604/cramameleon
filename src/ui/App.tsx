@@ -18,6 +18,7 @@ const recoveryErrors: Record<string, string> = {
   NETWORK_ERROR: '网络连接失败，请检查网络或 SSH 转发后重试。',
   MODEL_STREAM_INTERRUPTED: '回答传输中断，已保留收到的内容。请重试。',
   BUDGET_EXCEEDED: '今日模型额度不足，请等待北京时间次日额度恢复后重试。正在进行的请求也会占用额度。',
+  TOTAL_BUDGET_EXCEEDED: '全站模型额度已用完，暂时无法继续提问。',
   CONCURRENCY_LIMIT: '当前请求过多或上一请求仍在结束，请稍后重试。',
   MODEL_NOT_CONFIGURED: '模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。',
 };
@@ -107,8 +108,8 @@ export function App() {
     }
     return [...map.values()].map(item => ({ ...item, title: item.title || '新对话' })).sort((a, b) => b.updatedAt - a.updatedAt);
   }, [messages, materials, states]);
-  const visibleConversations = conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase()));
-  const current = messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId);
+  const visibleConversations = authenticated ? conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase())) : [];
+  const current = authenticated ? messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId) : [];
   const currentQuiz = [...current].reverse().find(message => message.quiz);
   // The quiz stays current for followups until the learner moves on: it is the
   // latest turn, or later turns have not moved the learning state to another phase.
@@ -117,7 +118,7 @@ export function App() {
     && ['completed', 'waiting'].includes(lastMessage?.status ?? '')
     && (lastMessage === currentQuiz || !['learning', 'scope'].includes(states[conversationId]?.phase ?? ''));
   const canRun = authenticated && loaded && appSession?.modelReady && !busy && !importing && !leaving;
-  const currentTitle = conversations.find(item => item.id === conversationId)?.title ?? '新对话';
+  const currentTitle = (authenticated && conversations.find(item => item.id === conversationId)?.title) || '新对话';
   const sourceDocument = source ? materials[conversationId]?.documents.find(d=>d.id===source.documentId) : undefined;
 
   async function refreshHealth() {
@@ -157,8 +158,7 @@ export function App() {
       if (initial) { accessValid.current = true; setAuthenticated(true); }
     } catch {
       if (generation !== sessionGeneration.current) return;
-      if (initial) setAuthenticated(false);
-      setNotice('无法连接后端，请检查 SSH 转发与服务。');
+      setNotice('无法连接后端，请稍后重试。');
     }
   }
   async function recheckReadiness() {
@@ -185,7 +185,7 @@ export function App() {
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
-  }, [input, conversationId]);
+  }, [input, conversationId, authenticated]);
 
   async function authorize() {
     if (authBusy) return;
@@ -316,29 +316,17 @@ export function App() {
     if (id === conversationId) setConversationId(crypto.randomUUID());
   }
 
-  if (!authenticated) return <div className="auth-screen">
-    <div className="auth-card">
-      <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
-      <h1>开始学习</h1>
-      <p>你的学习助手。直接提问即可。</p>
-      <input className="search" type="password" autoComplete="current-password" aria-label="内部访问口令" placeholder="输入环境文件中的内部访问口令" value={accessToken} onChange={e => setAccessToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && accessToken && !authBusy) void authorize(); }}/>
-      <button className="primary-button" onClick={() => void authorize()} disabled={authBusy || authenticated === null || !accessToken}>{authenticated === null ? '检查会话中…' : authBusy ? '授权中…' : '进入学习空间'}</button>
-      <small>内部开发访问 · 仅通过 SSH 转发使用。旧站授权尚未接入。</small>
-      {notice && <div role="alert" className="notice">{notice}</div>}
-    </div>
-  </div>;
-
   return <div className={`app ${sidebarOpen ? 'sidebar-open' : ''}`}>
     <aside className="sidebar" aria-label="会话列表">
       <div className="sidebar-header">
         <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭侧边栏">×</button>
       </div>
-      <button className="new-chat" onClick={newConversation} disabled={busy || importing || leaving || !loaded}><span>＋</span>新对话</button>
-      <input className="search" placeholder="搜索对话" value={loaded ? query : ''} onChange={event => setQuery(event.target.value)} aria-label="搜索对话"/>
+      <button className="new-chat" onClick={newConversation} disabled={!authenticated || busy || importing || leaving || !loaded}><span>＋</span>新对话</button>
+      <input className="search" placeholder="搜索对话" value={authenticated && loaded ? query : ''} disabled={!authenticated} onChange={event => setQuery(event.target.value)} aria-label="搜索对话"/>
       <div className="sidebar-label">对话</div>
       <nav className="conversation-list">
-        {!visibleConversations.length && <div className="list-empty">{query ? '没有匹配的对话' : '还没有对话'}</div>}
+        {authenticated && !visibleConversations.length && <div className="list-empty">{query ? '没有匹配的对话' : '还没有对话'}</div>}
         {visibleConversations.map(item => <div key={item.id} className={`conversation-item ${item.id === conversationId ? 'active' : ''}`}>
           <button className="conversation-main" disabled={leaving || !loaded || ((busy || importing) && item.id !== conversationId)} onClick={() => openConversation(item.id)}>
             <span className="conversation-title">{item.running && <span className="running-dot"/>}{item.title}</span>
@@ -350,8 +338,8 @@ export function App() {
       <div className="sidebar-footer">
         <span className={`status-dot ${health?.status === 'ok' ? 'online' : 'offline'}`}/>
         <span>{health?.status === 'ok' ? '服务在线' : '后端待检查'}</span>
-        <small role="status" aria-label="本机存储状态">{storageFailed ? '本机记录需要处理' : storageStatus}</small>
-        <button className="icon-button" disabled={busy || importing || leaving} onClick={() => void logout()}>退出</button>
+        {authenticated && <small role="status" aria-label="本机存储状态">{storageFailed ? '本机记录需要处理' : storageStatus}</small>}
+        {authenticated && appSession?.mode === 'internal' && <button className="icon-button" disabled={busy || importing || leaving} onClick={() => void logout()}>退出</button>}
       </div>
     </aside>
     <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)}/>
@@ -362,7 +350,7 @@ export function App() {
         <div className="topbar-title"><strong>{currentTitle}</strong></div>
       </header>
 
-      {(states[conversationId]?.course || states[conversationId]?.chapter || states[conversationId]?.progress) && <div className="learning-progress" aria-label="学习位置"><strong>{[states[conversationId]?.course, states[conversationId]?.chapter].filter(Boolean).join(' · ')}</strong><span>{states[conversationId]?.progress}</span></div>}
+      {authenticated && (states[conversationId]?.course || states[conversationId]?.chapter || states[conversationId]?.progress) && <div className="learning-progress" aria-label="学习位置"><strong>{[states[conversationId]?.course, states[conversationId]?.chapter].filter(Boolean).join(' · ')}</strong><span>{states[conversationId]?.progress}</span></div>}
       <section ref={chat} className="chat" aria-label="聊天记录" aria-live="polite" onScroll={event => { const el = event.currentTarget; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48; }}>
         <div className="chat-inner">
           {!current.length && <div className="empty">
@@ -403,12 +391,18 @@ export function App() {
       </section>
 
       <footer className="composer-wrap">
+        {notice && <div role="alert" className="notice">{notice}</div>}
+        {authenticated === null && (notice
+          ? <button className="primary-button" type="button" onClick={() => { setNotice(''); void refreshSession(true); }}>重新连接</button>
+          : <div role="status" className="composer-hint">正在连接学习空间…</div>)}
+        {authenticated === false && <form className="composer access-form" onSubmit={event => { event.preventDefault(); if (accessToken && !authBusy) void authorize(); }}>
+          <input className="search" type="password" autoComplete="current-password" aria-label="内部访问口令" placeholder="输入内部访问口令" value={accessToken} onChange={event => setAccessToken(event.target.value)}/>
+          <button className="primary-button" type="submit" disabled={authBusy || !accessToken}>{authBusy ? '授权中…' : '进入学习空间'}</button>
+        </form>}
+        {authenticated && <>
         {storageFailed && <div role="alert" className="notice">{storageStatus}<button onClick={retryStorage}>{readFailed ? '重试读取' : '重试保存'}</button></div>}
         {!appSession?.modelReady && <div role="alert" className="notice">模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。此检查不会调用模型。<button type="button" disabled={checkingReadiness || busy} onClick={() => void recheckReadiness()}>{checkingReadiness ? '正在检查模型状态…' : '重新检查模型状态'}</button></div>}
-        {appSession && <div className="composer-hint">北京时间今日 token：{appSession.budget.used.toLocaleString()} / {appSession.budget.limit.toLocaleString()}（含预留）</div>}
-        <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy || importing || leaving || !loaded} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {exitRisk && storageFailed && <div role="alert" className="notice">保存失败。仍然退出可能丢失未保存的修改；退出前会尽量保留当前用户的本机恢复副本。可重试保存，或自行选择仍然退出。<button disabled={busy || importing || leaving} onClick={() => void logout(true)}>仍然退出（可能丢失修改）</button><button disabled={leaving} onClick={() => setExitRisk(false)}>继续编辑</button></div>}
-        {notice && <div role="alert" className="notice">{notice}</div>}
         <MaterialComposer
           key={`${appSession?.user.id}:${conversationId}`}
           scope={materials[conversationId] ?? { documents: [], selectedIds: [] }}
@@ -425,10 +419,11 @@ export function App() {
           <label className="sr-only" htmlFor="message-input">输入消息</label>
           <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={loaded ? input : ''} disabled={!canRun} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
         </MaterialComposer>
+        </>}
       </footer>
     </main>
 
-    {source && loaded && <SourceViewer source={source} document={sourceDocument} onClose={()=>setSource(null)}/>}
+    {authenticated && source && loaded && <SourceViewer source={source} document={sourceDocument} onClose={()=>setSource(null)}/>}
   </div>;
 }
 // TODO(ui): Full accessibility pass.

@@ -64,6 +64,35 @@ func writeCompletion(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"你好\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13}}\n\ndata: [DONE]\n\n")
 }
+
+func TestDailyTokenBudgetConfig(t *testing.T) {
+	t.Setenv("APP_ENV", "internal")
+	t.Setenv("APP_BIND", "")
+	t.Setenv("APP_ACCESS_TOKEN", "test-internal-access-token-123456")
+	t.Setenv("APP_MAX_INPUT_BYTES", "")
+	t.Setenv("APP_MAX_OUTPUT_TOKENS", "")
+	t.Setenv("APP_DEVELOPER_ID", "")
+	t.Setenv("DEEPSEEK_MODEL", "")
+	for _, tt := range []struct {
+		name, value string
+		want        int64
+	}{
+		{name: "default", want: 1_000_000},
+		{name: "environment override", value: "200000", want: 200_000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("APP_DAILY_TOKEN_BUDGET", tt.value)
+			cfg, err := loadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.dailyBudget != tt.want {
+				t.Errorf("daily budget = %d, want %d", cfg.dailyBudget, tt.want)
+			}
+		})
+	}
+}
+
 func TestAuthorizationAndNoDemo(t *testing.T) {
 	_, srv, client := setup(t)
 	code, _ := post(t, srv, client, request("unauth"))

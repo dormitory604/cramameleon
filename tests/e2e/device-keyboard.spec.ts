@@ -82,6 +82,61 @@ async function expectInViewport(page: Page, locator: Locator) {
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
 }
 
+test('streamed Markdown renders formatting, keeps code literal and escapes unsafe markup', async ({ page }) => {
+  await ready(page);
+  await page.getByLabel('输入消息').fill('请展示 Markdown');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  const reply = page.locator('.msg-text').last();
+  await emit(page, 0, [{ type: 'text_delta', delta: '## 计算步骤\n\n**条件' }]);
+  await expect(reply.getByRole('heading', { name: '计算步骤' })).toBeVisible();
+  await expect(reply).toHaveClass(/streaming/);
+  const code = String.raw`console.log("\(x\)", "$y$");`;
+  await answer(page, 0, [
+    '概率**',
+    '1. 写出已知条件\n2. 代入公式',
+    '- [x] 检查结果',
+    String.raw`行内 \(x^2\)，分式 $\frac{1}{2}$。`,
+    '~~~js\n' + code + '\n~~~',
+    '[参考资料](https://example.com/notes)',
+    '[危险链接](javascript:alert%281%29)',
+    '<img src="/unsafe.png" onerror="window.unsafeMarkdown = true">',
+    '说明[^note]\n\n[^note]: 计算过程。',
+  ].join('\n\n'));
+  await expect(reply).not.toHaveClass(/streaming/);
+  await expect(reply.locator('strong')).toHaveText('条件概率');
+  await expect(reply.locator('ol').first().getByRole('listitem')).toHaveCount(2);
+  await expect(reply.getByRole('checkbox')).toBeChecked();
+  await expect(reply.getByRole('checkbox')).toBeDisabled();
+  await expect(reply.locator('.katex')).toHaveCount(2);
+  await expect(reply.locator('pre code')).toHaveText(code);
+  await expect(reply.getByRole('link', { name: '参考资料' })).toHaveAttribute('href', 'https://example.com/notes');
+  await expect(reply.getByRole('link', { name: '危险链接' })).toHaveCount(0);
+  await expect(reply.locator('img')).toHaveCount(0);
+  await expect(reply.getByText(/<img src=/)).toBeVisible();
+  const note = reply.getByRole('link', { name: '[1]', exact: true });
+  const target = (await note.getAttribute('href'))!.slice(1);
+  expect(await page.evaluate(id => document.getElementById(id)?.textContent, target)).toContain('计算过程。');
+});
+
+test('quiz Markdown keeps links and block markup inside a single answer control', async ({ page }) => {
+  await ready(page);
+  await page.getByLabel('输入消息').fill('考考我');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  const text = String.raw`**选项内容** \(x=1\) [说明](https://example.com)` + '\n\n- 补充条件';
+  await emit(page, 0, [{ type: 'tool_call', id: 'markdown-quiz', name: 'present_quiz',
+    arguments: { ...quiz, origin: 'generated', options: [{ ...quiz.options[0], text }, quiz.options[1]] },
+  }, ...toolDone], true);
+  await answer(page, 1, '请选择。');
+  const option = page.locator('.quiz-option').first();
+  await expect(option.locator('strong')).toHaveText('选项内容');
+  await expect(option.locator('.katex')).toHaveCount(1);
+  await expect(option).toContainText('说明');
+  await expect(option).toContainText('补充条件');
+  await expect(option.locator('a, p, ul')).toHaveCount(0);
+  await option.click();
+  await expect(page.locator('.quiz-feedback')).toContainText('回答正确');
+});
+
 for (const [device, use] of Object.entries(devices)) test.describe(`${device} layout`, () => {
   test.use(use);
 
@@ -201,6 +256,9 @@ test.describe('desktop keyboard', () => {
     await expect(dialog).toHaveCount(0);
     await expect(chip).toBeFocused();
 
+    const materials = page.locator('.materials-panel > summary');
+    await tabTo(page, materials);
+    await page.keyboard.press('Enter');
     const view = page.getByRole('button', { name: '查看文本：互斥讲义.txt', exact: true });
     await tabTo(page, view);
     await expectFocusRing(view);

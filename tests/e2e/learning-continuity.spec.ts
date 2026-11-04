@@ -36,8 +36,8 @@ async function reloadSaved(page: Page) {
   await expect(page.getByLabel('输入消息')).toBeEnabled();
 }
 
-test('storage status tracks the latest edit before reload and deletion', async ({ page }) => {
-  await modelBoundary(page, [text('已开始学习。')]);
+test('storage status tracks the latest turn before reload and deletion', async ({ page }) => {
+  await modelBoundary(page, [text('已开始学习。'), text('先用一个具体例子。'), text('接着解释必要条件。')]);
   await send(page, '开始学习');
   await reloadSaved(page);
 
@@ -48,23 +48,18 @@ test('storage status tracks the latest edit before reload and deletion', async (
     const record = () => void (window as unknown as { recordStorageStatus(value: string): Promise<void> }).recordStorageStatus(element.textContent ?? '');
     new MutationObserver(record).observe(element, { childList: true, characterData: true, subtree: true });
   });
-  await page.getByText('当前对话偏好', { exact: true }).click();
-  const preference = page.getByPlaceholder('例如：回答简短，不主动出题');
-  await preference.fill('用具体例子简短讲解');
+  await send(page, '用具体例子讲解');
   await expect.poll(() => transitions).toContain('正在保存到当前浏览器');
   await reloadSaved(page);
-  await page.getByText('当前对话偏好', { exact: true }).click();
-  await expect(preference).toHaveValue('用具体例子简短讲解');
+  await expect(page.getByText('先用一个具体例子。', { exact: true })).toBeVisible();
 
-  await preference.fill('详细解释必要条件');
+  await send(page, '详细解释必要条件');
   await reloadSaved(page);
-  await page.getByText('当前对话偏好', { exact: true }).click();
-  await expect(preference).toHaveValue('详细解释必要条件');
+  await expect(page.getByText('接着解释必要条件。', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '删除对话 开始学习', exact: true }).click();
   await reloadSaved(page);
   await expect(page.getByText('还没有对话', { exact: true })).toBeVisible();
-  await page.getByText('当前对话偏好', { exact: true }).click();
-  await expect(preference).toHaveValue('');
+  await expect(page.getByText('接着解释必要条件。', { exact: true })).toHaveCount(0);
 });
 
 test('chapter-only learning location is visible and restored without claiming mastery', async ({ page }) => {
@@ -189,12 +184,9 @@ for (const change of [
   });
 }
 
-test('one-turn preferences expire after reload while session preferences persist and remain editable', async ({ page }) => {
+test('one-turn preferences expire after reload while session preferences set in chat persist', async ({ page }) => {
   const steps = [text('会话内可以出题。')];
   const requests = await modelBoundary(page, steps);
-  await page.getByText('当前对话偏好', { exact: true }).click();
-  const preference = page.getByPlaceholder('例如：回答简短，不主动出题');
-  await preference.fill('详细讲解');
   await send(page, '以后可以出题');
   expect(requests[0].tools.some(tool => tool.function.name === 'present_quiz')).toBe(true);
 
@@ -205,26 +197,21 @@ test('one-turn preferences expire after reload while session preferences persist
   expect(requests[1].messages.at(-1)?.content).toBe(temporary);
   expect(requests[1].messages[0].content).toContain('不能反推交集为空');
   expect(requests[1].tools.some(tool => tool.function.name === 'present_quiz')).toBe(false);
-  await expect(preference).toHaveValue('详细讲解');
-  await expect(page.getByText(/^已记住：/)).toHaveCount(0);
   await reloadSaved(page);
-  await page.getByText('当前对话偏好', { exact: true }).click();
-  await expect(preference).toHaveValue('详细讲解');
 
-  steps.push(text('沿用会话偏好详细讲解，可以按需练习。'));
+  steps.push(text('可以按需练习。'));
   await send(page, '接着讲');
   expect(requests[3].messages[0].content).toContain('"quizPolicy":"allow"');
-  expect(requests[3].messages[0].content).toContain('"preferences":"详细讲解"');
   expect(requests[3].messages[0].content).not.toContain('"instructions":["这次');
   expect(requests[3].tools.some(tool => tool.function.name === 'present_quiz')).toBe(true);
 
   steps.push(text('以后只讲解，不出题。'));
   await send(page, '以后别出题');
-  await expect(page.getByText(/^已记住：/)).toContainText('以后别出题');
   await reloadSaved(page);
   steps.push(text('继续只讲解互斥事件。'));
   await send(page, '继续');
   expect(requests[5].messages[0].content).toContain('"quizPolicy":"avoid"');
+  expect(requests[5].messages[0].content).toContain('以后别出题');
   expect(requests[5].tools.some(tool => tool.function.name === 'present_quiz')).toBe(false);
   expect(requests[5].messages[0].content).not.toContain(temporary);
   await page.getByRole('button', { name: '新对话' }).click();
