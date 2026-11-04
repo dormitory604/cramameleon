@@ -47,8 +47,8 @@ export function Materials({scope,disabled,onChange,onBusy,onSource}:{scope:Mater
  return <details className="materials-panel" open>
   <summary>本地资料（已选 {selected.length}/{scope.documents.length}）</summary>
   <p className="materials-hint" aria-label="本轮资料范围" role="status">{!scope.documents.length
-   ?'尚未导入资料。请先导入并勾选课程文件；直接提问可获得通用知识说明，不能据此确认本校课件或考试范围。'
-   :!selected.length?'尚未勾选资料。请勾选下方文件后再依据资料提问；当前只能按通用知识回答。'
+   ?'尚未导入资料，没有可检索的本地文件。请导入并勾选课程文件，或直接在问题中粘贴原文；也可明确选择按通用知识回答，但不能据此确认本校课件或考试范围。'
+   :!selected.length?'尚未勾选资料，没有可检索的本地文件。请勾选下方文件、导入其他资料，或直接在问题中粘贴原文；也可明确选择按通用知识回答。'
    :`本轮已选 ${selected.length} 份资料，仅检索已选文件的可用文本；勾选不代表已读取全文。可取消勾选或移除以调整范围。`}</p>
   <p className="materials-hint">支持 TXT、Markdown、文本 PDF、DOCX、PPTX、ZIP；单文件 20MB。仅在本机解析和保存文本，提问时发送必要片段。</p>
   <label className="material-upload">导入本地资料<input aria-label="导入本地资料" type="file" multiple accept=".txt,.md,.markdown,.pdf,.docx,.pptx,.zip" disabled={locked} onChange={e=>{const files=Array.from(e.target.files??[]);e.target.value='';if(files.length)void importFiles(files);}}/></label>
