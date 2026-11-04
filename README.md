@@ -14,7 +14,7 @@ B 分支已将固定脚本 Demo 替换为真实 DeepSeek 模型代理。React UI
 - `APP_DAILY_TOKEN_BUDGET`：默认 100000，按北京时间自然日计算全局输入+输出 token。
 - `APP_MAX_OUTPUT_TOKENS`：默认 2048；`APP_MAX_INPUT_BYTES`：默认 64000。
 
-本次交付另提供了已生成随机访问口令的实际 `.env.internal`；API 密钥仍为占位符。环境文件和 SQLite 不提交 Git。不得在前端设置 VITE 模型密钥。
+内部访问口令与真实 API 密钥在目标服务器 `.env.internal` 中配置，修改后重启内测服务。环境文件和 SQLite 不提交 Git。不得在前端设置 VITE 模型密钥。
 
 ```sh
 npm ci --no-audit --no-fund
@@ -47,14 +47,14 @@ sh scripts/internal.sh start
 
 - `AgentInput`：动作、当前会话有效历史、选中文档、偏好/进度和 AbortSignal。
 - `AgentEvent`：文字、工具状态、题目、来源、资料候选、文档、学习状态、用量、错误和唯一终态。
-- `FakeAgent`：独立、无需网络的脚本事件实现，仅供 A 显式导入联调；正式 UI 始终使用 PiAgentAdapter。
-- 仅将当前会话已完成的问答对送入模型，保留最近完整对，默认历史最多 12000 字符/30 条消息。失败/中断回答不进入历史。
+- `PiAgentAdapter` 是唯一 Agent 实现；自动化测试通过注入可控模型响应验证同一套真实 Pi 调度、业务校验与事件协议。
+- 仅将当前会话已完成或等待用户操作的有效问答对送入模型，保留最近完整对，默认历史最多 12000 字符/30 条消息。失败/中断回答不进入历史。
 - 重试保留原用户消息、替换失败回答；本轮问题只发送一次。
-- 会话偏好可在输入框上方修改并保存；用户当前指令优先。进度和资料事件已留契约，完整教学 Skill/资料流程属于后续工作。
-- 题目通过 `present_quiz` 工具完整返回并校验。当前仅支持明确标记的自编题，不伪造来源。最多一次修复；作答或看答案不发模型请求。
+- 会话偏好可修改并保存；用户当前指令优先。concept/review/exam 教学 Skill、课程/章节/进度、会话与单轮偏好已接入。简单问题直接回答，明确教学请求按需读取 Skill。
+- 题目通过 `present_quiz` 工具完整返回并校验。支持自编题，以及有已读资料来源的改编题/原题；原题必须核对题干和选项。每轮最多一道题，最多修复一次，再失败退回讲解；作答或看答案不发模型请求。
 - 默认每轮 6 次工具/120 秒，另外最多 7 次模型请求；取消、终止后丢弃迟到事件。
 - 本机数据使用新的 `cramameleon` IndexedDB，按真实内部用户 ID 分区。旧 `cramameleon-demo` 数据保留但不自动混入真实学习历史。
-- 资料读取与解析尚未实现，传入资料动作时明确返回 MATERIALS_NOT_READY，不能声称已读取。
+- `search_context`、`cite_sources` 仅处理当前已选且已解析的文本块，引用只能使用本轮已读块。文件上传/解析、旧站资料搜索/读取及正式资料选择界面仍未接入；不能把工具支持等同于完整资料流程已完成。
 
 ## API
 
@@ -81,6 +81,6 @@ npx playwright install chromium
 npx playwright test
 ```
 
-也可通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定已有 Chrome 路径。浏览器测试使用测试上游，覆盖会话隔离、重试去重、题板反馈、恢复/删除和模型未配置；Go 测试验证协议转换、分片工具参数、权限、取消和持久预算。真实付费 API 验收需要填写实际密钥，本次未调用。
+也可通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定已有 Chrome 路径。浏览器测试使用测试上游，覆盖会话隔离、重试去重、题板反馈、恢复/删除和模型未配置；Go 测试验证协议转换、分片工具参数、权限、取消和持久预算。新阶段真实模型验收已通过 12 个用例，覆盖简单问答、教学 Skill、复习范围与续接、出题、临时偏好及已解析资料的引用与注入防护，详见 [教学执行验收](docs/Agent教学执行验收-2026-11-04.md)。本次清理只删除旧联调实现及其专用测试，不重复消耗真实模型额度；协议、取消、历史与教学工具测试继续使用真实 PiAgentAdapter。
 
 实现依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/) 与 [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/)。

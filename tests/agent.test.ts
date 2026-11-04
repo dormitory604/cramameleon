@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PiAgentAdapter } from '../src/agent/PiAgentAdapter.ts';
-import { FakeAgent } from '../src/agent/FakeAgent.ts';
 import type { AgentInput, AppSession } from '../src/contracts/index.ts';
 const config: AppSession = { user: { id: 'u', name: 'u' }, mode: 'internal', modelReady: true, model: 'deepseek-flash', limits: { maxToolCalls: 6, timeoutSeconds: 120, maxOutputTokens: 512 }, budget: { day: '2026-11-04', limit: 100000, used: 0 } };
 const input = (): AgentInput => ({ sessionId: 'chat-a', turnId: 'turn-a', action: { type: 'send', text: '考考我' }, history: [{ role: 'user', text: '我的课程是概率论' },{ role: 'assistant', text: '好的' }], state: { preferences: '简短', progress: '' }, documents: [], signal: new AbortController().signal });
@@ -37,8 +36,4 @@ test('abort yields only cancelled terminal and no later content',async()=>{
   const task=Array.fromAsync(new PiAgentAdapter(config,fetcher).run({...input(),signal:controller.signal}));
   setTimeout(()=>controller.abort(),20);const events=await task;
   assert.equal(events.filter(e=>e.type==='done').length,1);assert.equal((events.at(-1) as any).status,'cancelled');assert.equal(events.filter(e=>e.type==='text_delta').length,0);
-});
-test('pure frontend FakeAgent preserves the same envelope and never makes network calls',async()=>{
-  const events=await Array.fromAsync(new FakeAgent().run(input()));
-  assert.deepEqual(events,[{type:'done',status:'completed',sessionId:'chat-a',turnId:'turn-a'}]);
 });
