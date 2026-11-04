@@ -389,8 +389,8 @@ func (s *appServer) model(c *gin.Context) {
 				return
 			}
 			ids[call.ID] = true
-			var args map[string]any
-			if json.Unmarshal([]byte(call.Function.Arguments), &args) != nil || args == nil {
+			args, ok := parseToolArguments(call.Function.Arguments)
+			if !ok {
 				protocolError("MODEL_PROTOCOL", "工具参数不是完整 JSON 对象")
 				return
 			}

@@ -22,6 +22,7 @@
 present_quiz 的参数遵守本项目工具 schema：
 
 - question：完整题干；options：每项含唯一 id、非空 text 和 explanation；correctOptionId 必须指向其中一项。
+- 参数是 JSON：题干、选项和解释中的 LaTeX 反斜杠必须写成两个，例如 `"$\\frac{1}{2}$"`、`"\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}"`；矩阵换行 `\\` 在 JSON 中写作 `\\\\`。不要输出未转义的单个反斜杠。
 - generated：自编题，缺省使用此类型；没有资料来源时 sourceRefs 为 []。
 - adapted：根据本轮已读资料的知识、情境或题目改写，sourceRefs 必须提供真实已读块，不能标为原题。
 - past_paper：只有工具能够在明确标记为 past_paper 的资料中，核对同一已读块内的原题题干和全部选项时使用；不改写题干或选项后冒称真题。资料标题含“真题”不能替代这一核对。
