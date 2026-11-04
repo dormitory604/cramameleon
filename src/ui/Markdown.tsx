@@ -9,6 +9,15 @@ const markdown = MarkdownIt({ html: false, linkify: true })
   .use(footnote)
   .use(tasklist, { containerClass: 'contains-task-list' });
 
+// 历史里的题板记录是本机附注；模型偶尔会把它原样抄进回答（JSON 转义后公式也会坏掉），展示时去掉。
+export function stripQuizRecords(text: string): string {
+  return text
+    .replace(/(?:〔系统附注[^〕]*〕\s*)?题目记录[：:]\s*\{[\s\S]*?\}\s*用户作答[：:][^\n]*/g, '')
+    .replace(/(?:〔系统附注[^〕]*〕\s*)?题目记录[：:]\s*\{[^\n]*/g, '')
+    .replace(/〔系统附注[^〕]*〕/g, '')
+    .trimEnd();
+}
+
 markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
   if (env?.inline) return '';
   tokens[index].attrSet('target', '_blank');

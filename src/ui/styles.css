@@ -1,35 +1,44 @@
+/* 色调沿用破壁计划（arxiv.jaison.ink）：奶油底色、樟树绿主色、暖墨文字。 */
 :root {
-  --bg: #ffffff;
-  --sidebar: #f7f7f8;
+  --bg: #fffbf5;
+  --sidebar: #faf6ee;
   --panel: #ffffff;
-  --hover: #ececee;
-  --active: #e4e4e7;
-  --border: #e4e4e7;
-  --text: #18181b;
-  --muted: #71717a;
-  --faint: #a1a1aa;
-  --accent: #18181b;
+  --hover: #f2eadc;
+  --active: #ece3d2;
+  --border: #ece3d2;
+  --text: #1b1a18;
+  --muted: #6e665b;
+  --faint: #908577;
+  --accent: #2d6a4f;
   --accent-text: #ffffff;
-  --user-bubble: #f4f4f5;
-  --code-bg: #fafafa;
-  --ok: #16a34a;
-  --ok-bg: #f0fdf4;
-  --bad: #dc2626;
-  --bad-bg: #fef2f2;
-  --warn: #d97706;
-  --link: #2563eb;
+  --user-bubble: #f2eadc;
+  --code-bg: #faf6ee;
+  --ok: #3f8e5c;
+  --ok-bg: #eef6f0;
+  --bad: #c8364e;
+  --bad-bg: #feeded;
+  --warn: #d86519;
+  --link: #3d6890;
   --radius: 12px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
 }
+/* 主题：默认跟随系统；html[data-theme] 为用户手动选择的浅色 / 深色。深色为同一暖色系的推演。 */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #18181b; --sidebar: #111113; --panel: #1f1f23; --hover: #27272a; --active: #2f2f33;
-    --border: #2f2f33; --text: #f4f4f5; --muted: #a1a1aa; --faint: #71717a;
-    --accent: #f4f4f5; --accent-text: #18181b; --user-bubble: #27272a; --code-bg: #1c1c1f;
-    --ok-bg: #052e16; --bad-bg: #2a0f0f; --link: #60a5fa;
+  :root:not([data-theme="light"]) {
+    --bg: #1b1a18; --sidebar: #151412; --panel: #24221f; --hover: #2e2b27; --active: #3f3a33;
+    --border: #36322c; --text: #faf6ee; --muted: #b8ae9f; --faint: #908577;
+    --accent: #6fb081; --accent-text: #0d2418; --user-bubble: #2e2b27; --code-bg: #201e1b;
+    --ok: #6fb081; --ok-bg: #143424; --bad: #f08a96; --bad-bg: #3a1519; --warn: #ff9a48; --link: #a4bcd3;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1a18; --sidebar: #151412; --panel: #24221f; --hover: #2e2b27; --active: #3f3a33;
+  --border: #36322c; --text: #faf6ee; --muted: #b8ae9f; --faint: #908577;
+  --accent: #6fb081; --accent-text: #0d2418; --user-bubble: #2e2b27; --code-bg: #201e1b;
+  --ok: #6fb081; --ok-bg: #143424; --bad: #f08a96; --bad-bg: #3a1519; --warn: #ff9a48; --link: #a4bcd3;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -41,8 +50,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* Brand */
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
-.brand-mark { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; }
-.brand-mark.small { width: 20px; height: 20px; border-radius: 6px; font-size: 11px; }
+.brand-mark { flex: none; display: block; width: 26px; height: 26px; border-radius: 8px; object-fit: cover; }
+.brand-mark.small { width: 22px; height: 22px; border-radius: 7px; }
 .icon-button { border: 0; background: transparent; width: 32px; height: 32px; border-radius: 8px; font-size: 18px; color: var(--muted); }
 .icon-button:hover { background: var(--hover); color: var(--text); }
 .mobile-only { display: none; }
@@ -83,6 +92,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .topbar { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--border); flex: none; }
 .topbar-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .topbar-title strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.theme-toggle { flex: none; font-size: 16px; }
 .topbar-title span { color: var(--faint); font-size: 12.5px; white-space: nowrap; }
 .chat { flex: 1; overflow-y: auto; min-height: 0; }
 .chat-inner { max-width: 760px; margin: 0 auto; padding: 24px 20px 12px; display: flex; flex-direction: column; gap: 20px; }
