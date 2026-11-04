@@ -1,22 +1,36 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatMessage, Scenario, Source } from '../contracts/index.ts';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { loadMessages, saveMessages } from '../session/demoStore.ts';
 
-const scenarios: { id: Scenario; title: string; description: string; prompt: string; icon: string }[] = [
-  { id: 'chat', title: '工具闭环', description: '流式文字 → 工具 → 再次响应', prompt: '演示一次完整的工具调用流程。', icon: '↗' },
-  { id: 'quiz', title: '题板反馈', description: '结构化题目与本地作答', prompt: '给我一道关于这个 Demo 架构的示例题。', icon: '▤' },
-  { id: 'slow', title: '停止与恢复', description: '中断慢速响应，继续新一轮', prompt: '开始一段慢速响应，让我测试停止。', icon: '◷' },
-  { id: 'error', title: '故障演示', description: '可控错误与手动重试', prompt: '触发一次模拟服务错误。', icon: '⌁' },
-];
+// 学习模式（普通问答 / 概念学习 / 系统学习 / 模拟考试）由模型根据提问自行选择，区别仅在于默认加载的
+// prompt 与 skill，属于 Agent 内部行为，界面上不展示。
+// TODO(router): 路由接入后删除此函数。当前 Demo 后端只认识固定场景，前端先用关键词把“出题/考试”
+// 类提问送到 quiz 场景，其余走 chat，仅用于让演示链路可走通。
+function demoScenario(text: string): Scenario {
+  return /考试|出题|题目|测验|测试我|考考|练习题|一道题/.test(text) ? 'quiz' : 'chat';
+}
+
+// 在不改动存储层的前提下，把所有会话的消息平铺保存，并用 conversationId 区分。
+type UiMessage = ChatMessage & { conversationId?: string; createdAt?: number };
 type Health = { status: string; stats?: { active: number; requests: number; completed: number; cancelled: number } };
-const statusText: Record<string, string> = { running: '正在运行', completed: '已完成', cancelled: '已停止', failed: '运行失败', limited: '达到上限', interrupted: '刷新后中断' };
+const statusText: Record<string, string> = { running: '运行中', completed: '已完成', cancelled: '已停止', failed: '失败', limited: '达到上限', interrupted: '已中断' };
+const LEGACY_ID = 'legacy';
+
+function relativeTime(time?: number) {
+  if (!time) return '';
+  const diff = Date.now() - time;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
 
 export function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
-  const [scenario, setScenario] = useState<Scenario>('chat');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
@@ -25,12 +39,31 @@ export function App() {
   const [loaded, setLoaded] = useState(false);
   const [source, setSource] = useState<Source | null>(null);
   const [copiedId, setCopiedId] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const active = useRef<{ id: string; controller: AbortController } | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const latestMessages = useRef(messages);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   latestMessages.current = messages;
-  const selected = scenarios.find(item => item.id === scenario)!;
+
+  const conversations = useMemo(() => {
+    const map = new Map<string, { id: string; title: string; updatedAt: number; running: boolean; count: number }>();
+    for (const message of messages) {
+      const id = message.conversationId ?? LEGACY_ID;
+      const entry = map.get(id) ?? { id, title: '', updatedAt: 0, running: false, count: 0 };
+      if (!entry.title && message.role === 'user') entry.title = message.text.slice(0, 40);
+      entry.updatedAt = Math.max(entry.updatedAt, message.createdAt ?? 0);
+      entry.running ||= message.status === 'running';
+      entry.count += 1;
+      map.set(id, entry);
+    }
+    return [...map.values()].map(item => ({ ...item, title: item.title || '新对话' })).sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [messages]);
+  const visibleConversations = conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase()));
+  const current = messages.filter(message => (message.conversationId ?? LEGACY_ID) === conversationId);
+  const currentTitle = conversations.find(item => item.id === conversationId)?.title ?? '新对话';
 
   async function refreshHealth() {
     try { const response = await fetch('/api/health'); if (!response.ok) throw new Error(); setHealth(await response.json()); }
@@ -43,9 +76,16 @@ export function App() {
   }, []);
   useEffect(() => {
     if (!authenticated) return;
-    let current = true;
-    void loadMessages().then(saved => { if (current) { setMessages(saved); setStorageStatus('已恢复本机记录'); } }).catch(() => { if (current) setStorageStatus('本机存储不可用，刷新后记录将丢失'); }).finally(() => { if (current) setLoaded(true); });
-    return () => { current = false; };
+    let live = true;
+    void loadMessages().then(saved => {
+      if (!live) return;
+      const list = saved as UiMessage[];
+      setMessages(list);
+      setStorageStatus('已恢复本机记录');
+      const latest = [...list].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
+      if (latest) setConversationId(latest.conversationId ?? LEGACY_ID);
+    }).catch(() => { if (live) setStorageStatus('本机存储不可用，刷新后记录将丢失'); }).finally(() => { if (live) setLoaded(true); });
+    return () => { live = false; };
   }, [authenticated]);
   useEffect(() => {
     if (!loaded || !authenticated) return;
@@ -55,7 +95,13 @@ export function App() {
       void saveMessages(latestMessages.current).then(() => setStorageStatus('已保存到当前浏览器')).catch(() => setStorageStatus('保存失败，刷新后可能丢失记录'));
     }, 200);
   }, [messages, loaded, authenticated]);
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'instant', block: 'end' }); }, [messages]);
+  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'instant', block: 'end' }); }, [messages, conversationId]);
+  useEffect(() => {
+    const el = textarea.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+  }, [input]);
 
   async function authorize() {
     setAuthBusy(true); setNotice('');
@@ -66,17 +112,21 @@ export function App() {
     } catch (error) { setNotice(error instanceof Error ? error.message : '模拟授权失败'); }
     finally { setAuthBusy(false); }
   }
-  function updateMessage(id: string, change: (message: ChatMessage) => ChatMessage) {
+  function updateMessage(id: string, change: (message: UiMessage) => UiMessage) {
     setMessages(previous => previous.map(message => message.id === id ? change(message) : message));
   }
-  async function run(text: string, nextScenario: Scenario = scenario) {
+  async function run(text: string) {
     if (!text.trim() || active.current || !loaded) return;
     const id = crypto.randomUUID();
     const controller = new AbortController();
+    const scenario = demoScenario(text);
+    const now = Date.now();
     active.current = { id, controller }; setBusy(true); setInput(''); setNotice('');
-    setMessages(previous => [...previous, { id: crypto.randomUUID(), role: 'user', text: text.trim(), scenario: nextScenario }, { id, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, scenario: nextScenario }]);
+    setMessages(previous => [...previous,
+      { id: crypto.randomUUID(), role: 'user', text: text.trim(), scenario, conversationId, createdAt: now },
+      { id, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, scenario, conversationId, createdAt: now + 1 }]);
     try {
-      for await (const event of new PiAgentAdapter().run({ sessionId: 'demo-developer', turnId: id, text, scenario: nextScenario, signal: controller.signal })) {
+      for await (const event of new PiAgentAdapter().run({ sessionId: 'demo-developer', turnId: id, text, scenario, signal: controller.signal })) {
         if (active.current?.id !== id || event.turnId !== id) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         updateMessage(id, message => {
@@ -98,51 +148,129 @@ export function App() {
     }
   }
   function stop() {
-    const current = active.current;
-    if (!current) return;
-    current.controller.abort();
-    updateMessage(current.id, message => ({ ...message, status: 'cancelled' }));
+    const running = active.current;
+    if (!running) return;
+    running.controller.abort();
+    updateMessage(running.id, message => ({ ...message, status: 'cancelled' }));
   }
-  async function copy(message: ChatMessage) {
+  async function copy(message: UiMessage) {
     try { await navigator.clipboard.writeText(message.text); setCopiedId(message.id); setTimeout(() => setCopiedId(''), 1800); }
     catch { setNotice('浏览器未允许复制，请手动选择文字。'); }
   }
-  function retry(message: ChatMessage) {
-    const index = messages.findIndex(item => item.id === message.id);
-    const prompt = messages[index - 1];
-    if (prompt?.role === 'user') void run(prompt.text, message.scenario);
+  function retry(message: UiMessage) {
+    const index = current.findIndex(item => item.id === message.id);
+    const prompt = current[index - 1];
+    if (prompt?.role === 'user') void run(prompt.text);
+  }
+  function newConversation() {
+    if (busy) return;
+    setConversationId(crypto.randomUUID()); setInput(''); setNotice(''); setSidebarOpen(false);
+    setTimeout(() => textarea.current?.focus(), 0);
+  }
+  function openConversation(id: string) {
+    if (busy) return;
+    setConversationId(id); setNotice(''); setSidebarOpen(false);
+  }
+  function deleteConversation(id: string) {
+    if (busy) return;
+    setMessages(previous => previous.filter(message => (message.conversationId ?? LEGACY_ID) !== id));
+    if (id === conversationId) setConversationId(crypto.randomUUID());
   }
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <a className="brand" href="/" aria-label="Cramameleon 首页"><span className="brand-mark">C<span>•</span></span><span>Cramameleon<small>学习空间 · 工程预览</small></span></a>
-      <div className="sidebar-label">开发联调场景 <span>04</span></div>
-      <nav aria-label="演示场景">{scenarios.map(item => <button key={item.id} className={`scenario ${scenario === item.id ? 'selected' : ''}`} disabled={busy} onClick={() => { setScenario(item.id); setInput(''); }}><span className="scenario-icon">{item.icon}</span><span><strong>{item.title}</strong><small>{item.description}</small></span><span className="scenario-arrow">↗</span></button>)}</nav>
-      <div className="sidebar-note"><span className="tiny-dot"/>真实运行的工程链路<p>React → Pi Core → Go<br/>浏览器执行工具，再返回模型流</p><span className="note-tag">业务内容全部模拟</span></div>
-      <div className="sidebar-bottom"><span className="avatar">D</span><span>内部开发环境<small>仅本机 SSH 转发访问</small></span></div>
+  if (!authenticated) return <div className="auth-screen">
+    <div className="auth-card">
+      <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
+      <h1>开始学习</h1>
+      <p>你的学习助手。直接提问即可。</p>
+      <button className="primary-button" onClick={() => void authorize()} disabled={authBusy || authenticated === null}>{authenticated === null ? '检查会话中…' : authBusy ? '授权中…' : '进入（模拟授权）'}</button>
+      <small>内部 Demo 授权，不连接旧站账号。</small>
+      {notice && <div role="alert" className="notice">{notice}</div>}
+    </div>
+  </div>;
+
+  return <div className={`app ${sidebarOpen ? 'sidebar-open' : ''}`}>
+    <aside className="sidebar" aria-label="会话列表">
+      <div className="sidebar-header">
+        <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
+        <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭侧边栏">×</button>
+      </div>
+      <button className="new-chat" onClick={newConversation} disabled={busy}><span>＋</span>新对话</button>
+      <input className="search" placeholder="搜索对话" value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索对话"/>
+      <div className="sidebar-label">对话</div>
+      <nav className="conversation-list">
+        {!visibleConversations.length && <div className="list-empty">{query ? '没有匹配的对话' : '还没有对话'}</div>}
+        {visibleConversations.map(item => <div key={item.id} className={`conversation-item ${item.id === conversationId ? 'active' : ''}`}>
+          <button className="conversation-main" disabled={busy && item.id !== conversationId} onClick={() => openConversation(item.id)}>
+            <span className="conversation-title">{item.running && <span className="running-dot"/>}{item.title}</span>
+            <span className="conversation-meta">{relativeTime(item.updatedAt)} · {item.count} 条</span>
+          </button>
+          <button className="conversation-delete" disabled={busy} onClick={() => deleteConversation(item.id)} aria-label={`删除对话 ${item.title}`} title="删除">×</button>
+        </div>)}
+      </nav>
+      <div className="sidebar-footer">
+        <span className={`status-dot ${health?.status === 'ok' ? 'online' : 'offline'}`}/>
+        <span>{health?.status === 'ok' ? '服务在线' : '后端待检查'}</span>
+        <small>{storageStatus}</small>
+      </div>
     </aside>
-    <main className="workspace">
-      <header className="topbar"><div><span className="breadcrumb">工作空间</span><span className="slash">/</span><strong>Demo</strong><span className="demo-label">模拟模式</span></div><div className="health"><span className={`tiny-dot ${health?.status === 'ok' ? 'online' : 'offline'}`}/>{health?.status === 'ok' ? 'Go 服务在线' : '后端连接待检查'}</div></header>
-      {!authenticated ? <section className="auth-area"><div className="auth-card"><div className="eyebrow">CRAMAMELEON / DEVELOPMENT</div><h1>先让每个模块<br/>真正连接起来。</h1><p>独立运行的前端、Pi Agent 与 Go 后端。<br/>通过开发态模拟入口，预览完整交互链路。</p><button className="primary enter-button" onClick={() => void authorize()} disabled={authBusy || authenticated === null}>{authenticated === null ? '检查会话中…' : authBusy ? '授权中…' : '模拟旧站入口 →'}</button><div className="auth-footnote">这是内部 Demo 授权，不连接旧站账号。<br/>正式入口授权、真实模型与资料接入均为 TODO。</div>{notice && <div role="alert" className="notice">{notice}</div>}</div><div className="auth-diagram"><span>01 · React 界面</span><i>↓</i><span>02 · Pi 浏览器调度</span><i>↕</i><span>03 · Go 模拟模型流</span><small>无真实账号 · 无外部模型调用 · 无课程数据</small></div></section> : <>
-        <section className="workspace-title"><div><div className="eyebrow">ENGINEERING PLAYGROUND</div><h1>{selected.title}<span> / Demo</span></h1><p>{selected.description}。所有示例均用于工程验证。</p></div><button className="secondary" disabled={busy || !messages.length} onClick={() => { setMessages([]); setNotice(''); }}>清空本机记录</button></section>
-        <div className="capability-strip"><span><b>Pi Core</b> 浏览器 Agent</span><span><b>Go / Gin</b> 流式接口</span><span><b>IndexedDB</b> 本机恢复</span><span className="version">契约 demo.v1</span></div>
-        <section className="conversation" aria-label="聊天记录" aria-live="polite">
-          {!messages.length && <div className="empty-state"><div className="empty-symbol">✳</div><h2>从一次真实往返开始</h2><p>发送消息后，观察文字流、工具状态与最终结果。<br/>这里的回复采用固定脚本，内容不随问题变化。</p><button className="suggestion" disabled={busy || !loaded} onClick={() => void run(selected.prompt)}><span>{selected.prompt}</span><b>↗</b></button><div className="empty-caption">不调用真实模型，不产生模型费用</div></div>}
-          {messages.map((message, index) => <article key={message.id} className={`message ${message.role}`}>
-            <div className={`message-avatar ${message.role}`}>{message.role === 'user' ? '你' : 'C'}</div><div className="message-content"><div className="message-heading"><strong>{message.role === 'user' ? '你' : 'Cramameleon'}</strong>{message.role === 'assistant' && <><span className="message-badge">模拟响应</span><span className={`run-status ${message.status}`}>{statusText[message.status ?? 'completed']}</span></>}</div>
-              {message.text ? <div className="message-text">{message.text}</div> : message.status === 'running' && <div className="waiting">正在建立模型流<span>•••</span></div>}
-              {!!message.logs?.length && <details className="execution" open={message.status === 'running'}><summary><span>↳ 执行记录</span><span>{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary><ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol></details>}
+    <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)}/>
+
+    <main className="main">
+      <header className="topbar">
+        <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} aria-label="打开侧边栏">☰</button>
+        <div className="topbar-title"><strong>{currentTitle}</strong></div>
+      </header>
+
+      <section className="chat" aria-label="聊天记录" aria-live="polite">
+        <div className="chat-inner">
+          {!current.length && <div className="empty">
+            <div className="empty-icon">✳</div>
+            <h2>今天想学点什么？</h2>
+            <p>提问、理解概念、系统复习或者做题，都可以直接说。</p>
+          </div>}
+          {current.map((message, index) => message.role === 'user'
+            ? <article key={message.id} className="msg user"><div className="bubble">{message.text}</div></article>
+            : <article key={message.id} className="msg assistant">
+              <div className="msg-head"><span className="brand-mark small">C</span>{message.status && message.status !== 'completed' && <span className={`run-status ${message.status}`}>{statusText[message.status]}</span>}</div>
+              {!!message.logs?.length && <details className="tool-block" open={message.status === 'running'}>
+                <summary><span className="tool-icon">⚙</span><span>工具调用</span><span className="tool-count">{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary>
+                <ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol>
+              </details>}
+              {message.text ? <div className="msg-text">{message.text}{message.status === 'running' && <span className="cursor"/>}</div> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
               {message.error && <div role="alert" className="error-card">{message.error}</div>}
-              {message.quiz && <div className="quiz"><div className="quiz-topline"><span>示例题板</span><span>单选 · 虚构工程样例</span></div><h3>{message.quiz.question}</h3><div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, current => ({ ...current, selectedOption: option.id, revealed: true }))}><span>{option.id}</span><span>{option.text}</span>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>{message.revealed ? <div className="quiz-feedback"><strong>{message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> {option.explanation}</p>)}<small>本地反馈已完成；继续输入或手动开启下一轮才会请求模型。</small></div> : <small className="quiz-hint">请选择一个选项，作答后显示答案与全部解释。</small>}</div>}
-              {!!message.sources?.length && <div className="sources">{message.sources.map(item => <button key={item.chunkId} onClick={() => setSource(item)}>▧ {item.title} <span>↗</span></button>)}</div>}
-              {message.role === 'assistant' && message.status !== 'running' && <div className="message-actions"><button onClick={() => void copy(message)} disabled={!message.text}>{copiedId === message.id ? '已复制' : '复制回答'}</button>{index === messages.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={busy} onClick={() => retry(message)}>重试本轮</button>}</div>}
-            </div></article>)}<div ref={bottom}/>
-        </section>
-        <footer className="composer-area">{notice && <div role="alert" className="notice">{notice}</div>}<form className="composer" onSubmit={event => { event.preventDefault(); void run(input); }}><label className="sr-only" htmlFor="message-input">输入消息</label><textarea id="message-input" rows={2} placeholder={`试试：${selected.prompt}`} value={input} disabled={busy || !loaded} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/><div className="composer-bottom"><span>◈ {selected.title}<i>固定脚本</i></span>{busy ? <button className="stop-button" type="button" onClick={stop}>■ 停止</button> : <button className="send-button" type="submit" disabled={!input.trim() || !loaded} aria-label="发送消息">↑</button>}</div></form><div className="footer-meta"><span>{storageStatus}</span><span>6 次工具调用 / 120 秒上限{health?.stats ? ` · 后端累计 ${health.stats.requests} 次请求` : ''}</span></div></footer>
-      </>}
+              {message.quiz && <div className="quiz">
+                <div className="quiz-top"><span>练习题</span><span>单选题</span></div>
+                <h3>{message.quiz.question}</h3>
+                <div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, item => ({ ...item, selectedOption: option.id, revealed: true }))}><span className="option-key">{option.id}</span><span>{option.text}</span>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>
+                {message.revealed
+                  ? <div className="quiz-feedback"><strong className={message.selectedOption === message.quiz.correctOptionId ? 'ok' : 'bad'}>{message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> {option.explanation}</p>)}</div>
+                  : <small className="quiz-hint">选择一个选项后显示答案与解析。</small>}
+              </div>}
+              {!!message.sources?.length && <div className="sources">{message.sources.map(item => <button key={item.chunkId} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
+              {message.status !== 'running' && <div className="msg-actions">
+                <button onClick={() => void copy(message)} disabled={!message.text}>{copiedId === message.id ? '已复制' : '复制'}</button>
+                {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={busy} onClick={() => retry(message)}>重试</button>}
+              </div>}
+            </article>)}
+          <div ref={bottom}/>
+        </div>
+      </section>
+
+      <footer className="composer-wrap">
+        {notice && <div role="alert" className="notice">{notice}</div>}
+        <form className="composer" onSubmit={event => { event.preventDefault(); void run(input); }}>
+          <label className="sr-only" htmlFor="message-input">输入消息</label>
+          <textarea ref={textarea} id="message-input" rows={1} placeholder="问点什么，或者说“考考我”…" value={input} disabled={busy || !loaded} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
+          <div className="composer-bar">
+            <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+            {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={!input.trim() || !loaded} aria-label="发送消息">↑</button>}
+          </div>
+        </form>
+      </footer>
     </main>
-    {source && <div className="modal-backdrop" onClick={() => setSource(null)}><section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title" onClick={event => event.stopPropagation()}><button className="modal-close" onClick={() => setSource(null)} aria-label="关闭来源">×</button><div className="eyebrow">模拟来源 · 缓存文本块</div><h2 id="source-title">{source.title}</h2><p className="source-location">{source.location}</p><pre>{source.text}</pre><small>该示例没有原文件，也不对应真实课程资料。</small></section></div>}
+
+    {source && <div className="modal-backdrop" onClick={() => setSource(null)}><section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title" onClick={event => event.stopPropagation()}><button className="icon-button modal-close" onClick={() => setSource(null)} aria-label="关闭来源">×</button><div className="eyebrow">来源</div><h2 id="source-title">{source.title}</h2><p className="source-location">{source.location}</p><pre>{source.text}</pre></section></div>}
   </div>;
 }
-// TODO(ui): A's production layout, multiple sessions, course/material selection and full accessibility pass.
+// TODO(ui): Course/material selection,  full accessibility pass.
 // TODO(auth): Replace simulated entrance with old-site one-time authorization code exchange.
