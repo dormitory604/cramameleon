@@ -41,6 +41,15 @@ sh scripts/internal.sh start
 
 此次服务器交付使用 `APP_STATIC_DIR=var/app-dist`，保留旧 `dist` 与旧 Demo 二进制以便回退；后续本机构建需把 dist 同步至这个配置目录，或调整 APP_STATIC_DIR。进程日志在 `var/log/internal.log`。脚本校验 PID 对应二进制后才停止进程。尚未配置 systemd，重启主机后需手动启动。
 
+### 线上自动部署
+
+线上部署跟随 `main`。每次推送后，GitHub Actions 用仓库的短期只读令牌触发腾讯云上的 `~/.local/bin/cramameleon-deploy-main`。服务器拉取 `main`，在独立目录构建，通过健康检查后保留新版本。切换失败时恢复上一版。只有后端代码变动时才重启 PM2 进程。
+
+- 在 GitHub Actions 的 **Deploy main** 查看日志，也可以从那里手动触发。
+- 仓库保存三个 Actions secrets，分别用于 SSH 目标、仅允许执行部署命令的密钥，以及服务器主机公钥。服务器用现有 PM2 配置运行应用。
+- 如果服务器访问 GitHub 需要代理，可在服务端启动部署脚本时设置 `CRAMAMELEON_GIT_PROXY`。该设置只作用于 Git 拉取。
+- 修改 [部署脚本](scripts/deploy-main.sh) 后，需要同步更新服务器上的安装副本。
+
 ## 契约与行为
 
 `src/contracts` 是 `app.v1` 的业务类型及模型事件校验，Go DTO 在 `server/model.go` 对齐。模型请求包含 requestId、turnId、sessionId、完整 messages 和白名单 tools；不接收客户端模型名、密钥、上游 URL 或费用限额。
