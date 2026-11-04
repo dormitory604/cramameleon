@@ -217,3 +217,25 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .materials-panel button, .materials-panel select, .material-feedback button { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: inherit; }
 .material-warning { width: 100%; margin: 0; color: var(--muted); font-size: 12px; }
 .source-modal select { max-width: 100%; margin-top: 12px; }
+.remote-materials { width: min(760px, 100%); max-width: 760px; text-align: left; }
+.remote-materials h3 { margin: 18px 0 8px; overflow-wrap: anywhere; }
+.remote-materials p { line-height: 1.6; }
+.remote-materials button:not(.modal-close), .remote-materials select, .remote-materials input:not([type=checkbox]) { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
+.remote-materials a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.remote-quota { padding: 12px; margin: 16px 0; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; color: var(--muted); }
+.remote-quota strong { color: var(--text); }
+.remote-search { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.remote-search input { flex: 1; min-width: 130px; width: 0; }
+.remote-results { display: grid; gap: 8px; min-height: 80px; }
+.remote-results button { text-align: left; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.remote-results button:hover { background: var(--hover); }
+.remote-results small, .remote-catalog small { display: block; font-size: 12px; color: var(--muted); }
+.remote-pagination { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 16px; font-size: 12px; }
+.remote-catalog { max-height: 35vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; margin: 14px 0; }
+.remote-catalog label { display: flex; align-items: flex-start; gap: 10px; padding: 11px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.remote-catalog input { flex: none; margin-top: 4px; }
+.remote-catalog label:has(input:disabled) { color: var(--muted); }
+.remote-confirm { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 18px; font-size: 13px; }
+.remote-confirm button.primary { background: var(--text); color: var(--panel); font-weight: 600; margin-top: 8px; }
+.remote-error { white-space: pre-wrap; }
+@media (max-width: 600px) { .remote-materials { padding: 24px 16px; } .remote-search input { order: 3; min-width: 100%; } }

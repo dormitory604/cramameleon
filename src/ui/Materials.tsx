@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ArchiveEntry, Document, MaterialScope, Source } from '../contracts/index.ts';
+import type { AppSession, ArchiveEntry, Document, MaterialScope, Source } from '../contracts/index.ts';
 import { importLocalFile, listLocalArchive } from '../tools/localMaterials.ts';
+import { RemoteMaterials } from './RemoteMaterials.tsx';
 
 type MaterialComposerProps = {
+ session?: AppSession | null;
  scope: MaterialScope;
  disabled: boolean;
  onChange: (scope: MaterialScope) => void;
@@ -14,7 +16,15 @@ type MaterialComposerProps = {
  children: ReactNode;
 };
 
-export function MaterialComposer({scope, disabled, onChange, onBusy, onSource, onSubmit, actions, children}: MaterialComposerProps) {
+export function MaterialComposer({session, scope, disabled, onChange, onBusy, onSource, onSubmit, actions, children}: MaterialComposerProps) {
+ const [remoteOpen, setRemoteOpen] = useState(false);
+ const [entryContext,setEntryContext]=useState<AppSession['initialContext']>();
+ useEffect(()=>{
+  if(session?.mode!=='old-site'||!session.initialContext||!Object.keys(session.initialContext).length)return;
+  const key=`cram-entry:${session.user.id}:${JSON.stringify(session.initialContext)}`;
+  if(sessionStorage.getItem(key))return;
+  sessionStorage.setItem(key,'1');setEntryContext(session.initialContext);setRemoteOpen(true);
+ },[session?.user.id]);
  const [menuOpen, setMenuOpen] = useState(false);
  const [dragging, setDragging] = useState(false);
  const dragDepth = useRef(0);
@@ -55,7 +65,7 @@ export function MaterialComposer({scope, disabled, onChange, onBusy, onSource, o
    task.signal.throwIfAborted();
    const documents=[...scope.documents],selectedIds=new Set(scope.selectedIds);let added=0;
    for(const doc of incoming) {
-    const existing=documents.find(d=>d.fingerprint===doc.fingerprint);
+    const existing=documents.find(d=>d.origin!=='old-site'&&d.fingerprint===doc.fingerprint);
     if(existing){selectedIds.add(existing.id);warnings.push(`${doc.title}：已有相同内容，复用本机缓存`);continue;}
     if(documents.length>=20){warnings.push(`${doc.title}：每个会话最多 20 份资料，请移除不用的资料后重试`);continue;}
     documents.push(doc);selectedIds.add(doc.id);added++;
@@ -70,7 +80,7 @@ export function MaterialComposer({scope, disabled, onChange, onBusy, onSource, o
  const locked=disabled||working;
  return <form
   className={dragging && !locked ? 'composer composer-dragging' : 'composer'}
-  onSubmit={event => { event.preventDefault(); onSubmit(); }}
+  onSubmit={event => { event.preventDefault(); if(!remoteOpen)onSubmit(); }}
   onDragEnter={event => {
    if (!event.dataTransfer.types.includes('Files')) return;
    event.preventDefault();
@@ -112,10 +122,11 @@ export function MaterialComposer({scope, disabled, onChange, onBusy, onSource, o
   </section>}
   </div>}
   {!!scope.documents.length && <details className="materials-panel">
-   <summary><span>本地资料（已选 {scope.selectedIds.length}/{scope.documents.length}）</span><span className="material-names">{scope.documents.map(doc => doc.title).join('、')}</span></summary>
+   <summary><span>学习资料（已选 {scope.selectedIds.length}/{scope.documents.length}）</span><span className="material-names">{scope.documents.map(doc => doc.title).join('、')}</span></summary>
    <ul className="material-list">{scope.documents.map(doc=><li key={doc.id}>
    <label><input type="checkbox" aria-label={`使用资料 ${doc.title}`} disabled={locked} checked={scope.selectedIds.includes(doc.id)} onChange={e=>onChange({...scope,selectedIds:e.target.checked?[...scope.selectedIds,doc.id]:scope.selectedIds.filter(id=>id!==doc.id)})}/>{doc.title}</label>
    <small>{doc.chunks.length} 个文本块</small>
+   {doc.remoteRef&&<a href={doc.remoteRef.url} target="_blank" rel="noreferrer">旧站原资料</a>}
    <select aria-label={`资料类型 ${doc.title}`} disabled={locked} value={doc.kind??'material'} onChange={e=>onChange({...scope,documents:scope.documents.map(d=>d.id===doc.id?{...d,kind:e.target.value as Document['kind']}:d)})}><option value="material">普通资料</option><option value="past_paper">历年试题（自行确认）</option></select>
    <button type="button" onClick={()=>onSource(doc.chunks[0])}>查看文本：{doc.title}</button>
    <button type="button" disabled={locked} onClick={()=>onChange({documents:scope.documents.filter(d=>d.id!==doc.id),selectedIds:scope.selectedIds.filter(id=>id!==doc.id)})}>移除：{doc.title}</button>
@@ -143,6 +154,7 @@ export function MaterialComposer({scope, disabled, onChange, onBusy, onSource, o
      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     </button>
     <div id="composer-add-options" className="composer-add-options" hidden={!menuOpen || locked}>
+     {session?.mode==='old-site'&&<button type="button" onClick={()=>{setMenuOpen(false);setRemoteOpen(true);}}>搜索课程资料</button>}
      <button type="button" aria-describedby="composer-file-help" onClick={() => {
       menuTrigger.current?.focus();
       setMenuOpen(false);
@@ -157,5 +169,10 @@ export function MaterialComposer({scope, disabled, onChange, onBusy, onSource, o
    {actions}
   </div>
   {dragging && !locked && <div className="composer-drop-hint" aria-hidden="true">松开以添加文件</div>}
+  {remoteOpen&&session?.mode==='old-site'&&<RemoteMaterials session={session} documents={scope.documents} onBusy={onBusy} onClose={()=>{setRemoteOpen(false);setEntryContext(undefined);}} initial={entryContext} onImport={incoming=>{
+   const documents=[...scope.documents],selectedIds=new Set(scope.selectedIds);
+   for(const doc of incoming){const index=documents.findIndex(d=>d.id===doc.id);if(index>=0)documents[index]=doc;else documents.push(doc);selectedIds.add(doc.id);}
+   onChange({documents,selectedIds:[...selectedIds]});
+  }}/>}
  </form>;
 }

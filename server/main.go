@@ -224,6 +224,8 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 		c.Status(204)
 	})
 	api.POST("/model", s.model)
+	api.GET("/old-site/*path", s.materials)
+	api.POST("/old-site/*path", s.materials)
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			fail(c, 404, "NOT_IMPLEMENTED", "此接口尚未实现")

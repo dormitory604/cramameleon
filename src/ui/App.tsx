@@ -354,6 +354,7 @@ export function App() {
         <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy || importing} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {notice && <div role="alert" className="notice">{notice}</div>}
         <MaterialComposer
+          session={appSession}
           key={`${appSession?.user.id}:${conversationId}`}
           scope={materials[conversationId] ?? { documents: [], selectedIds: [] }}
           disabled={busy || importing || !loaded}
