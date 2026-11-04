@@ -59,4 +59,3 @@ test('learning scope and chapter survive reload and preference editing',async({p
  await page.getByText('当前对话偏好',{exact:true}).click();await page.getByPlaceholder('例如：回答简短，不主动出题').fill('回答简短');
  await page.waitForTimeout(350);await page.reload();await expect(page.getByLabel('学习进度')).toContainText('条件概率');
 });
-
