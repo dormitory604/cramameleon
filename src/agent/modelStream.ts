@@ -75,7 +75,12 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
           else if (event.type === 'finish') finish = event.stopReason;
         };
         while (true) {
-          const { done, value } = await reader.read(); if (done) break;
+          // A native read failure after a valid start means the reply was cut off mid-transfer, not that the request never connected.
+          const { done, value } = await reader.read().catch((error: unknown) => {
+            if (started && !(error instanceof AppError)) throw new AppError('MODEL_STREAM_INTERRUPTED', '回答传输中断，已保留收到的内容，请手动重试');
+            throw error;
+          });
+          if (done) break;
           pending += decoder.decode(value, { stream: true });
           let split: number;
           while ((split = pending.indexOf('\n')) >= 0) { consume(pending.slice(0, split).replace(/\r$/, '')); pending = pending.slice(split + 1); }

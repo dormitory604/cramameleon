@@ -13,6 +13,26 @@ test('IndexedDB isolates users, restores interrupted rounds, and serializes dele
   await Promise.all([first,deleted]);
   assert.deepEqual((await loadData('user-a')).messages,[]);
 });
+test('a restore requested immediately after a save sees the accepted snapshot', async () => {
+  const pending = saveData('read-after-write', { version: 2, messages: [], states: { chat: { preferences: '回答简短', progress: '条件概率' } } });
+  const restored = await loadData('read-after-write');
+  await pending;
+  assert.equal(restored.states.chat?.progress, '条件概率');
+});
+
+test('an aborted read is reported as a read failure and a later restore can recover', async () => {
+  await saveData('aborted-read', { version: 2, messages: [], states: { chat: { preferences: '保留', progress: '第二章' } } });
+  const get = IDBObjectStore.prototype.get;
+  IDBObjectStore.prototype.get = function (key) {
+    const request = get.call(this, key);
+    request.addEventListener('success', () => this.transaction.abort(), { once: true });
+    return request;
+  };
+  try { await assert.rejects(loadData('aborted-read')); }
+  finally { IDBObjectStore.prototype.get = get; }
+  assert.equal((await loadData('aborted-read')).states.chat.progress, '第二章');
+});
+
 test('legacy v2 migrates without losing chats; parsed materials and selection isolate users and delete together',async()=>{
  const legacy={version:2 as const,messages:[],states:{}};
  await saveData('legacy-materials',legacy);assert.deepEqual((await loadData('legacy-materials')).materials,{});
