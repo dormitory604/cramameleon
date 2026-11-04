@@ -43,7 +43,7 @@ export class PiAgentAdapter implements AgentRunner {
    const disabled:string[]=[];
    let instruction='最新用户要求优先；每轮最多一道题。';
    if(!input.documents.length) disabled.push('search_context','cite_sources');
-   if(learning.quizPolicy==='avoid'){disabled.push('present_quiz');instruction+='用户要求不出题，本轮只讲解。';}
+   if(learning.quizPolicy==='avoid'){disabled.push('present_quiz');instruction+='用户要求不出题，只禁止题板；明确要求教学时仍必须读取对应 Skill 并记录学习位置。';}
    if(quizzes>0){disabled.push('present_quiz');instruction+='题板已展示，不再出题或泄露答案，等待用户作答。';}
    if(quizAttempts>=2&&quizzes===0){disabled.push('present_quiz');instruction+='题板已失败两次，不再修复；必须退回普通文字讲解，说明本轮未生成有效题目。';}
    if(toolCalls>=this.config.limits.maxToolCalls){disabled.push(...TOOL_NAMES);instruction+='本轮工具次数已到上限，保留已有结果，用文字完成本轮，不再调用工具。';}

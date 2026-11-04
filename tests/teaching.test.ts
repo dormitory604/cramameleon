@@ -96,3 +96,9 @@ test('cancelled teaching turn does not persist staged progress',async()=>{
  assert.equal(events.filter(e=>e.type==='state_update').length,0);
  assert.equal((events.at(-1) as any).status,'cancelled');
 });
+test('exam one-shot produces a valid quiz payload',async()=>{
+ const match=teachingContent.skills.exam.text.match(/present_quiz\((\{[^\n]+\})\)/);
+ assert.ok(match);let rendered:any;
+ await quizTool(q=>{rendered=q;}).execute('example',JSON.parse(match[1]));
+ assert.equal(rendered.origin,'generated');assert.equal(rendered.options.length,2);
+});

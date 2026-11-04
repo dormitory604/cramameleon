@@ -38,3 +38,25 @@ test('missing key disables send and clearly explains setup',async({page})=>{
  await page.route('**/api/health',r=>r.fulfill({json:{status:'ok'}}));
  await page.goto('/');await expect(page.getByText('模型尚未配置。请在服务器环境文件填写真实 API 密钥并重启服务。')).toBeVisible();await expect(page.getByLabel('输入消息')).toBeDisabled();await expect(page.getByRole('button',{name:'发送消息',exact:true})).toBeDisabled();
 });
+
+test('learning scope and chapter survive reload and preference editing',async({page})=>{
+ let count=0;
+ await page.route('**/api/session',r=>r.fulfill({json:session}));
+ await page.route('**/api/health',r=>r.fulfill({json:{status:'ok'}}));
+ await page.route('**/api/model',async route=>{
+  const body=route.request().postDataJSON();count++;
+  const state=count<=3?{course:'概率论',chapter:'',progress:'选择复习部分',phase:'scope'}:{course:'概率论',chapter:'条件概率',progress:'理解条件概率',phase:'learning'};
+  const step=count===1?{type:'tool_call',id:'skill',name:'read_skill',arguments:{name:'review'}}:
+   count===2||count===4?{type:'tool_call',id:'state-'+count,name:'update_learning_state',arguments:state}:
+   {type:'text_delta',delta:count===3?'想先复习哪一部分？':'条件概率是已知条件下的概率。'};
+  const events=[{type:'start',requestId:body.requestId},step,{type:'usage',usage:{input:1,output:1,total:2}},{type:'finish',stopReason:step.type==='tool_call'?'toolUse':'stop'}];
+  await route.fulfill({contentType:'text/event-stream',body:events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join('')});
+ });
+ await page.goto('/');await page.getByLabel('输入消息').fill('带我复习概率论');await page.getByRole('button',{name:'发送消息',exact:true}).click();
+ await expect(page.getByLabel('学习进度')).toContainText('概率论');await expect(page.getByText('等待你的选择')).toBeVisible();
+ await page.getByLabel('输入消息').fill('我选条件概率');await page.getByRole('button',{name:'发送消息',exact:true}).click();
+ await expect(page.getByLabel('学习进度')).toContainText('条件概率');await expect(page.getByRole('button',{name:'继续学习',exact:true})).toBeVisible();
+ await page.getByText('当前对话偏好',{exact:true}).click();await page.getByPlaceholder('例如：回答简短，不主动出题').fill('回答简短');
+ await page.waitForTimeout(350);await page.reload();await expect(page.getByLabel('学习进度')).toContainText('条件概率');
+});
+
