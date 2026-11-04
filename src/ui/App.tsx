@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentAction, AppSession, ChatMessage, LearningState, MaterialScope, Source } from '../contracts/index.ts';
 import { Materials } from './Materials.tsx';
+import { SourceViewer } from './SourceViewer.tsx';
 import { Markdown } from './Markdown.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildHistory } from '../agent/context.ts';
@@ -73,7 +74,6 @@ export function App() {
   const current = messages.filter(message => (message.conversationId ?? LEGACY_ID) === conversationId);
   const currentTitle = conversations.find(item => item.id === conversationId)?.title ?? '新对话';
   const sourceDocument = source ? materials[conversationId]?.documents.find(d=>d.id===source.documentId) : undefined;
-  const cachedSource = sourceDocument?.chunks.find(c=>c.chunkId===source?.chunkId) ?? source;
 
   async function refreshHealth() {
     try { const response = await fetch('/api/health'); if (!response.ok) throw new Error(); setHealth(await response.json()); }
@@ -311,7 +311,7 @@ export function App() {
       </footer>
     </main>
 
-    {source && <div className="modal-backdrop" onClick={() => setSource(null)}><section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title" onClick={event => event.stopPropagation()}><button className="icon-button modal-close" onClick={() => setSource(null)} aria-label="关闭来源">×</button><div className="eyebrow">来源</div><h2 id="source-title">{source.title}</h2><p className="source-location">{source.location}</p><pre>{cachedSource?.text}</pre>{sourceDocument && <label>文本位置<select aria-label="文本位置" value={source.chunkId} onChange={e=>{const chunk=sourceDocument.chunks.find(c=>c.chunkId===e.target.value);if(chunk)setSource(chunk);}}>{sourceDocument.chunks.map(c=><option key={c.chunkId} value={c.chunkId}>{c.location}</option>)}</select></label>}</section></div>}
+    {source && <SourceViewer source={source} document={sourceDocument} onClose={()=>setSource(null)}/>}
   </div>;
 }
 // TODO(ui): Full accessibility pass.

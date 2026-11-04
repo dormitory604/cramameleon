@@ -7,13 +7,14 @@ export function pptx() {return zipSync({
  'ppt/slides/slide1.xml':strToU8('<p:sld xmlns:p="p" xmlns:a="a"><a:p><a:r><a:t>第二张：条件概率</a:t></a:r></a:p></p:sld>'),
  'ppt/slides/slide2.xml':strToU8('<p:sld xmlns:p="p" xmlns:a="a"><a:p><a:r><a:t>第一张：事件</a:t></a:r></a:p></p:sld>')
 });}
-export function pdf(empty=false) {
+export function pdf(empty=false,emptySecondPage=false) {
  const stream=empty?'':'BT /F1 12 Tf 72 700 Td (Conditional probability: P A given B) Tj ET';
+ const secondStream=emptySecondPage?'':stream;
  const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>',
  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>',
  `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>',
- `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+ `<< /Length ${secondStream.length} >>\nstream\n${secondStream}\nendstream`,'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
  let text='%PDF-1.4\n';const offsets=[0];
  for(const [i,obj] of objects.entries()){offsets.push(text.length);text+=`${i+1} 0 obj\n${obj}\nendobj\n`;}
  const xref=text.length;text+=`xref\n0 ${offsets.length}\n0000000000 65535 f \n`;
