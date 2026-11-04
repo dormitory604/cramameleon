@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentAction, AppSession, ChatMessage, LearningState, MaterialScope, Source } from '../contracts/index.ts';
 import { Materials } from './Materials.tsx';
+import { Markdown } from './Markdown.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildHistory } from '../agent/context.ts';
 import { loadData, saveData } from '../session/appStore.ts';
@@ -271,14 +272,14 @@ export function App() {
                 <summary><span className="tool-icon">⚙</span><span>工具调用</span><span className="tool-count">{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary>
                 <ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol>
               </details>}
-              {message.text ? <div className="msg-text">{message.text}{message.status === 'running' && <span className="cursor"/>}</div> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
+              {message.text ? <Markdown className="msg-text" text={message.text} streaming={message.status === 'running'}/> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
               {message.error && <div role="alert" className="error-card">{message.error}</div>}
               {message.quiz && <div className="quiz">
                 <div className="quiz-top"><span>练习题</span><span>{message.quiz.origin === 'generated' ? '自编' : message.quiz.origin === 'adapted' ? '改编' : '真题'} · 单选题</span></div>
-                <h3>{message.quiz.question}</h3>
-                <div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, item => ({ ...item, selectedOption: option.id, revealed: true }))}><span className="option-key">{option.id}</span><span>{option.text}</span>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>
+                <h3><Markdown inline text={message.quiz.question}/></h3>
+                <div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, item => ({ ...item, selectedOption: option.id, revealed: true }))}><span className="option-key">{option.id}</span><Markdown inline text={option.text}/>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>
                 {message.revealed
-                  ? <div className="quiz-feedback"><strong className={message.selectedOption === message.quiz.correctOptionId ? 'ok' : 'bad'}>{!message.selectedOption ? `正确答案：${message.quiz.correctOptionId}` : message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> {option.explanation}</p>)}</div>
+                  ? <div className="quiz-feedback"><strong className={message.selectedOption === message.quiz.correctOptionId ? 'ok' : 'bad'}>{!message.selectedOption ? `正确答案：${message.quiz.correctOptionId}` : message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> <Markdown inline text={option.explanation}/></p>)}</div>
                   : <small className="quiz-hint">选择一个选项后显示答案与解析。<button onClick={() => updateMessage(message.id, item => ({ ...item, revealed: true }))}>看答案</button></small>}
               </div>}
               {!!message.sources?.length && <div className="sources">{message.sources.map(item => <button key={item.documentId + ':' + item.chunkId} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}

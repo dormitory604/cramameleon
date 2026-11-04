@@ -17,6 +17,7 @@
   --bad: #dc2626;
   --bad-bg: #fef2f2;
   --warn: #d97706;
+  --link: #2563eb;
   --radius: 12px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
@@ -26,7 +27,7 @@
     --bg: #18181b; --sidebar: #111113; --panel: #1f1f23; --hover: #27272a; --active: #2f2f33;
     --border: #2f2f33; --text: #f4f4f5; --muted: #a1a1aa; --faint: #71717a;
     --accent: #f4f4f5; --accent-text: #18181b; --user-bubble: #27272a; --code-bg: #1c1c1f;
-    --ok-bg: #052e16; --bad-bg: #2a0f0f;
+    --ok-bg: #052e16; --bad-bg: #2a0f0f; --link: #60a5fa;
     color-scheme: dark;
   }
 }
@@ -101,8 +102,38 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .run-status.running { color: var(--ok); }
 .run-status.failed, .run-status.limited { color: var(--bad); }
 .run-status.cancelled, .run-status.interrupted { color: var(--warn); }
-.msg-text { white-space: pre-wrap; word-break: break-word; line-height: 1.7; }
-.cursor { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--text); animation: blink 1s steps(1) infinite; }
+.msg-text { word-break: break-word; line-height: 1.7; }
+.markdown.streaming > :last-child::after { content: ''; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--text); animation: blink 1s steps(1) infinite; }
+
+/* Markdown */
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre, .markdown .md-table, .markdown .katex-display { margin: 0 0 .8em; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 1.2em 0 .5em; line-height: 1.35; font-weight: 600; }
+.markdown h1 { font-size: 1.4em; }
+.markdown h2 { font-size: 1.25em; }
+.markdown h3 { font-size: 1.1em; }
+.markdown h4 { font-size: 1em; }
+.markdown ul, .markdown ol { padding-left: 1.5em; }
+.markdown li + li { margin-top: .25em; }
+.markdown li > p { margin: 0; }
+.markdown li > ul, .markdown li > ol { margin: .25em 0 0; }
+.markdown ul.contains-task-list { list-style: none; padding-left: .25em; }
+.markdown a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.markdown strong { font-weight: 600; }
+.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.2em 0; }
+.markdown blockquote { padding: 2px 0 2px 12px; border-left: 3px solid var(--border); color: var(--muted); }
+.markdown code { font-family: var(--mono); font-size: .88em; padding: .1em .35em; border-radius: 5px; background: var(--hover); }
+.markdown pre { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--code-bg); overflow-x: auto; line-height: 1.55; }
+.markdown pre code { padding: 0; background: transparent; font-size: 12.5px; }
+.markdown .md-table { overflow-x: auto; }
+.markdown table { border-collapse: collapse; font-size: 13px; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.markdown th { background: var(--code-bg); font-weight: 600; }
+.markdown img { max-width: 100%; }
+.markdown .katex { font-size: 1.08em; }
+.markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.markdown.inline .katex-display { display: inline-block; margin: 0; }
 .thinking { display: flex; gap: 4px; padding: 6px 0; }
 .thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: pulse 1.2s infinite; }
 .thinking span:nth-child(2) { animation-delay: .2s; }

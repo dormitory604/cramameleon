@@ -85,6 +85,8 @@ npx playwright test
 
 实现依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/) 与 [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/)。
 
+教学提示词与 Skill 参考 DeepTutor v1.7.1 的源码，按本项目的工具、资料引用和单题交互契约重新编写。实际参考文件、固定提交链接及适配说明见 [DeepTutor 教学提示词参考](docs/DeepTutor教学提示词参考.md)。
+
 ## 本地资料使用与验收
 
 在当前对话的“本地资料”中导入 TXT、Markdown、文本 PDF、DOCX、PPTX；ZIP 先勾选目录条目，再解析。文件仅在浏览器 Worker 中处理，缓存文本与元数据，不保存原始文件。导入不调用模型；发送问题后仅检索选中资料并提交必要片段。点来源按钮可查看真实页码、幻灯片或段落，并切换缓存文本块。
