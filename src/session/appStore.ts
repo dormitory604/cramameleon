@@ -1,6 +1,6 @@
-import type { ChatMessage, LearningState } from '../contracts/index.ts';
-export type LocalData = { version: 2; messages: ChatMessage[]; states: Record<string, LearningState> };
-const empty = (): LocalData => ({ version: 2, messages: [], states: {} });
+import type { ChatMessage, LearningState, MaterialScope } from '../contracts/index.ts';
+export type LocalData = { version: 2; messages: ChatMessage[]; states: Record<string, LearningState>; materials?: Record<string, MaterialScope> };
+const empty = (): LocalData => ({ version: 2, messages: [], states: {}, materials: {} });
 async function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('cramameleon', 2);
@@ -20,7 +20,7 @@ export async function loadData(userId: string): Promise<LocalData> {
       const record = request.result as LocalData | undefined;
       if (!record) { resolve(empty()); return; }
       if (record.version !== 2 || !Array.isArray(record.messages) || !record.states || typeof record.states !== 'object') { reject(new Error('本机记录版本不兼容')); return; }
-      resolve({ ...record, messages: record.messages.map(m => m.status === 'running' ? { ...m, status: 'interrupted' } : m) });
+      resolve({ ...record, materials: record.materials ?? {}, messages: record.messages.map(m => m.status === 'running' ? { ...m, status: 'interrupted' } : m) });
     };
     request.onerror = () => reject(request.error);
     transaction.oncomplete = () => db.close();

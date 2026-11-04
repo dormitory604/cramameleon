@@ -22,7 +22,7 @@ export function wireContext(messages: Message[]) {
   }
   return { messages: [{ role: 'system', content: system.join('\n\n') }, ...history], tools: [...tools.values()] };
 }
-export function createModelStream(input: AgentInput, callbacks: { started: () => void; usage: (u: ModelUsage) => void; error: (e: AppError) => void }, fetcher: typeof fetch = fetch) {
+export function createModelStream(input: AgentInput, callbacks: { started: () => void; usage: (u: ModelUsage) => void; error: (e: AppError) => void; policy?: () => { disabled: string[]; instruction: string } }, fetcher: typeof fetch = fetch) {
   return (model: Model<any>, context: TranscriptContext, options?: SimpleStreamOptions) => {
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id, stopReason: 'pending', timestamp: Date.now(), usage: emptyUsage() };
@@ -33,8 +33,14 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
       const requestId = crypto.randomUUID();
       try {
         input.signal.throwIfAborted(); options?.signal?.throwIfAborted(); callbacks.started();
+        const wire = wireContext(context.messages);
+        const policy = callbacks.policy?.();
+        if (policy) {
+          wire.tools = wire.tools.filter(t => !policy.disabled.includes(t.function.name));
+          (wire.messages[0] as { content: string }).content += '\n本轮执行约束：' + policy.instruction;
+        }
         const response = await fetcher('/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', signal: options?.signal ?? input.signal,
-          body: JSON.stringify({ contractVersion: CONTRACT_VERSION, requestId, turnId: input.turnId, sessionId: input.sessionId, ...wireContext(context.messages) }) });
+          body: JSON.stringify({ contractVersion: CONTRACT_VERSION, requestId, turnId: input.turnId, sessionId: input.sessionId, ...wire }) });
         if (!response.ok) {
           const value = await response.json().catch(() => null);
           throw new AppError(value?.error?.code ?? 'NETWORK_ERROR', value?.error?.message ?? '模型服务请求失败');

@@ -15,7 +15,7 @@ export function buildHistory(messages: ChatMessage[], sessionId: string, retryUs
   for (const m of current) {
     if (m.id === retryUserId) break;
     if (m.role === 'user') { user = m; continue; }
-    if (!user || m.status !== 'completed') continue;
+    if (!user || !['completed', 'waiting'].includes(m.status ?? '')) continue;
     let text = m.text;
     if (m.quiz) text += '\n题目记录：' + JSON.stringify(m.quiz) + '\n用户作答：' + (m.selectedOption ?? '尚未作答');
     pairs.push([{ role: 'user', text: user.text }, { role: 'assistant', text }]);
