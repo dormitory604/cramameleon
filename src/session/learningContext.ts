@@ -2,6 +2,10 @@ import type { ChatMessage, HistoryMessage } from '../contracts/index.ts';
 import { validateQuiz } from '../contracts/index.ts';
 import { buildHistory, HISTORY_MAX_CHARS, HISTORY_MAX_MESSAGES } from '../agent/context.ts';
 
+// The record is a machine annotation on the assistant turn, not prose the model
+// wrote; label it so the model does not imitate it in its next reply.
+export const QUIZ_RECORD_NOTE = '〔系统附注：上面的题目已通过 present_quiz 题板展示，下列记录由本机生成，仅供参考，不是你写过的回答；回复中不要复述或模仿此格式，出题仍须调用 present_quiz〕';
+
 function quizRecord(message: ChatMessage, omitQuiz = false): string {
   const answer = message.selectedOption
     ? `${omitQuiz && message.selectedOption.length > 256 ? '已作答（选项标识过长，保留在本机）' : message.selectedOption}（${message.selectedOption === message.quiz!.correctOptionId ? '回答正确' : '回答错误'}）`
@@ -11,7 +15,7 @@ function quizRecord(message: ChatMessage, omitQuiz = false): string {
     id: message.quiz!.id.length <= 256 ? message.quiz!.id : undefined,
     correctOptionId: message.quiz!.correctOptionId.length <= 256 ? message.quiz!.correctOptionId : undefined,
   } : { ...message.quiz!, sources: message.quiz!.sources.map(({ text: _text, ...source }) => source) };
-  return '题目记录：' + JSON.stringify(quiz) + '\n用户作答：' + answer;
+  return QUIZ_RECORD_NOTE + '\n题目记录：' + JSON.stringify(quiz) + '\n用户作答：' + answer;
 }
 
 // Use the shared pairing boundary with small index markers to locate complete

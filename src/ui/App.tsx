@@ -2,11 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentAction, AppSession, ChatMessage, Source } from '../contracts/index.ts';
 import { MaterialComposer } from './Materials.tsx';
 import { SourceViewer } from './SourceViewer.tsx';
-import { Markdown } from './Markdown.tsx';
+import { Markdown, stripQuizRecords } from './Markdown.tsx';
+import { ThemeToggle } from './Theme.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildLearningHistory } from '../session/learningContext.ts';
 import { useLocalRecords } from '../session/useLocalRecords.ts';
 import { LEGACY_CONVERSATION_ID } from '../session/appStore.ts';
+
+const LOGO = import.meta.env.BASE_URL + 'logo-192.png';
 
 // UI consumes business events only; the Agent owns model/tool scheduling.
 type Health = { status: string; stats?: { active: number; requests: number; completed: number; cancelled: number } };
@@ -319,7 +322,7 @@ export function App() {
   return <div className={`app ${sidebarOpen ? 'sidebar-open' : ''}`}>
     <aside className="sidebar" aria-label="会话列表">
       <div className="sidebar-header">
-        <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
+        <div className="brand"><img className="brand-mark" src={LOGO} alt=""/><span>Cramameleon</span></div>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭侧边栏">×</button>
       </div>
       <button className="new-chat" onClick={newConversation} disabled={!authenticated || busy || importing || leaving || !loaded}><span>＋</span>新对话</button>
@@ -348,6 +351,7 @@ export function App() {
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} aria-label="打开侧边栏">☰</button>
         <div className="topbar-title"><strong>{currentTitle}</strong></div>
+        <ThemeToggle/>
       </header>
 
       {authenticated && (states[conversationId]?.course || states[conversationId]?.chapter || states[conversationId]?.progress) && <div className="learning-progress" aria-label="学习位置"><strong>{[states[conversationId]?.course, states[conversationId]?.chapter].filter(Boolean).join(' · ')}</strong><span>{states[conversationId]?.progress}</span></div>}
@@ -363,12 +367,12 @@ export function App() {
             return message.role === 'user'
             ? <article key={message.id} className="msg user"><div className="bubble">{message.text}</div></article>
             : <article key={message.id} className="msg assistant">
-              <div className="msg-head"><span className="brand-mark small">C</span>{message.status && message.status !== 'completed' && <span className={`run-status ${displayStatus(message)}`}>{statusText[displayStatus(message)!]}</span>}</div>
+              <div className="msg-head"><img className="brand-mark small" src={LOGO} alt=""/>{message.status && message.status !== 'completed' && <span className={`run-status ${displayStatus(message)}`}>{statusText[displayStatus(message)!]}</span>}</div>
               {!!message.logs?.length && <details className="tool-block">
                 <summary><span className="tool-icon">⚙</span><span>工具调用</span><span className="tool-count">{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary>
                 <ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol>
               </details>}
-              {message.text ? <Markdown className="msg-text" text={message.text} streaming={message.status === 'running'}/> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
+              {message.text ? <Markdown className="msg-text" text={message.role === 'assistant' ? stripQuizRecords(message.text) : message.text} streaming={message.status === 'running'}/> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
               {message.error && <div role="alert" className="error-card">{message.error}</div>}
               {message.quiz && <div className="quiz">
                 <div className="quiz-top"><span>练习题</span><span>{message.quiz.origin === 'generated' ? '自编' : message.quiz.origin === 'adapted' ? '改编' : '真题'} · 单选题</span></div>
