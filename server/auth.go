@@ -135,6 +135,9 @@ func (s *appServer) mode() string {
 	if s.cfg.mode == "old-site" {
 		return "old-site"
 	}
+	if s.cfg.allowGuest {
+		return "guest"
+	}
 	return "internal"
 }
 
@@ -382,6 +385,13 @@ func (s *appServer) finishOldSiteAuth(c *gin.Context) {
 }
 
 func (s *appServer) authenticate(c *gin.Context) {
+	if s.mode() == "guest" {
+		c.Set("userID", guestUserID)
+		c.Set("userName", "访客")
+		c.Set("clientKey", "guest/"+c.ClientIP())
+		c.Next()
+		return
+	}
 	token, e := c.Cookie(cookieName)
 	if e != nil || len(token) > 128 {
 		fail(c, 401, "AUTH_REQUIRED", "应用会话已失效，请重新进入")

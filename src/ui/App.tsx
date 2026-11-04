@@ -1,15 +1,56 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentAction, AppSession, ChatMessage, EntryConfig, LearningState, MaterialScope, Source } from '../contracts/index.ts';
+import type { AgentAction, AppSession, ChatMessage, EntryConfig, Source } from '../contracts/index.ts';
 import { MaterialComposer } from './Materials.tsx';
+import { SourceViewer } from './SourceViewer.tsx';
+import { Markdown, stripQuizRecords } from './Markdown.tsx';
+import { ThemeToggle } from './Theme.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
-import { buildHistory } from '../agent/context.ts';
-import { loadData, saveData } from '../session/appStore.ts';
+import { buildLearningHistory } from '../session/learningContext.ts';
+import { useLocalRecords } from '../session/useLocalRecords.ts';
+import { LEGACY_CONVERSATION_ID } from '../session/appStore.ts';
+
+const LOGO = import.meta.env.BASE_URL + 'logo-192.png';
 
 // UI consumes business events only; the Agent owns model/tool scheduling.
-type UiMessage = ChatMessage;
 type Health = { status: string; stats?: { active: number; requests: number; completed: number; cancelled: number } };
 const statusText: Record<string, string> = { running: '运行中', completed: '已完成', cancelled: '已停止', failed: '失败', limited: '达到上限', interrupted: '已中断', waiting: '等待你的选择' };
-const LEGACY_ID = 'legacy';
+// The Agent ends an output-limit run as failed; the UI labels it as reaching the
+// limit (README) without rewriting the stored terminal status.
+const displayStatus = (message: ChatMessage) => message.status === 'failed' && message.errorCode === 'MODEL_OUTPUT_LIMIT' ? 'limited' : message.status;
+const recoveryErrors: Record<string, string> = {
+  NETWORK_ERROR: '网络连接失败，请检查网络或 SSH 转发后重试。',
+  MODEL_STREAM_INTERRUPTED: '回答传输中断，已保留收到的内容。请重试。',
+  BUDGET_EXCEEDED: '今日模型额度不足，请等待北京时间次日额度恢复后重试。正在进行的请求也会占用额度。',
+  TOTAL_BUDGET_EXCEEDED: '全站模型额度已用完，暂时无法继续提问。',
+  CONCURRENCY_LIMIT: '当前请求过多或上一请求仍在结束，请稍后重试。',
+  MODEL_NOT_CONFIGURED: '模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。',
+};
+
+// Select complete turns at A's submission boundary; visible records remain intact.
+function scopedMessages(messages: ChatMessage[], conversationId: string, selectedIds: string[], retryUserId?: string): ChatMessage[] {
+  const selected = new Set(selectedIds);
+  const current = messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId);
+  // Older records have no turn scope. Treat their known citations as one scope,
+  // including uncited follow-ups that may paraphrase those same materials.
+  const legacyScope = [...new Set(current.filter(message => message.selectedMaterialIds === undefined)
+    .flatMap(message => [...message.sources ?? [], ...message.quiz?.sources ?? []].map(source => source.documentId)))];
+  const compatible = (message: ChatMessage) => {
+    const scope = message.selectedMaterialIds ?? legacyScope;
+    // A turn stays usable while every material it saw is still selected; adding
+    // materials keeps it, deselecting or removing one of its materials drops it.
+    return scope.every(id => selected.has(id));
+  };
+  const result: ChatMessage[] = [];
+  let user: ChatMessage | undefined;
+  for (const message of current) {
+    if (message.id === retryUserId) break;
+    if (message.role === 'user') { user = message; continue; }
+    if (!user) continue;
+    if (compatible(user) && compatible(message)) result.push(user, message);
+    user = undefined;
+  }
+  return result;
+}
 
 function relativeTime(time?: number) {
   if (!time) return '';
@@ -24,44 +65,45 @@ export function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [appSession, setAppSession] = useState<AppSession | null>(null);
   const [entryConfig, setEntryConfig] = useState<EntryConfig | null>(null);
+  const authChannel=useRef<BroadcastChannel|null>(null);
   const [accessToken, setAccessToken] = useState('');
-  const [states, setStates] = useState<Record<string, LearningState>>({});
-  const [materials, setMaterials] = useState<Record<string, MaterialScope>>({});
   const [importing, setImporting] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
-  const [messages, setMessages] = useState<UiMessage[]>([]);
-  const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
+  const [checkingReadiness, setCheckingReadiness] = useState(false);
   const [notice, setNotice] = useState('');
-  const [storageStatus, setStorageStatus] = useState('正在读取本机记录');
-  const [loaded, setLoaded] = useState(false);
-  const [storageReady, setStorageReady] = useState(false);
+  const active = useRef<{ id: string; conversationId: string; controller: AbortController } | null>(null);
+  const accessValid = useRef(false);
+  const sessionGeneration = useRef(0);
+  // Records stay owned by the session user across an expiry (#8) and are
+  // replaced only when another user enters or the user exits (#9).
+  const { messages, setMessages, states, setStates, materials, setMaterials, conversationId, setConversationId, loaded, storageStatus, storageFailed, readFailed, retryStorage, flush, preserveRecovery } = useLocalRecords(appSession?.user.id, () => {
+    // Invalidate before abort: even a late terminal event belongs to the old turn.
+    detachActiveTurn();
+  });
+  const [leaving, setLeaving] = useState(false);
+  const [exitRisk, setExitRisk] = useState(false);
   const [source, setSource] = useState<Source | null>(null);
   const [copiedId, setCopiedId] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const active = useRef<{ id: string; controller: AbortController } | null>(null);
-  const bottom = useRef<HTMLDivElement>(null);
+  const chat = useRef<HTMLElement>(null);
+  // Follow new output only while the learner is at the bottom; reading history pauses it (#10).
+  const following = useRef(true);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const latestMessages = useRef(messages);
-  const latestStates = useRef(states);
-  const latestMaterials = useRef(materials);
-  latestMaterials.current = materials;
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const identity = useRef('');
-  const authChannel = useRef<BroadcastChannel | null>(null);
-  latestMessages.current = messages;
-  latestStates.current = states;
 
   const conversations = useMemo(() => {
     const map = new Map<string, { id: string; title: string; updatedAt: number; running: boolean; count: number }>();
+    for (const id of Object.keys(states)) {
+      map.set(id, { id, title: '', updatedAt: 0, running: false, count: 0 });
+    }
     for (const [id, scope] of Object.entries(materials)) {
       if(scope.documents.length) map.set(id, { id, title: scope.documents[0].title, updatedAt: scope.documents[0].importedAt ?? 0, running: false, count: 0 });
     }
     for (const message of messages) {
-      const id = message.conversationId ?? LEGACY_ID;
+      const id = message.conversationId ?? LEGACY_CONVERSATION_ID;
       const entry = map.get(id) ?? { id, title: '', updatedAt: 0, running: false, count: 0 };
       if (!entry.title && message.role === 'user') entry.title = message.text.slice(0, 40);
       entry.updatedAt = Math.max(entry.updatedAt, message.createdAt ?? 0);
@@ -70,133 +112,173 @@ export function App() {
       map.set(id, entry);
     }
     return [...map.values()].map(item => ({ ...item, title: item.title || '新对话' })).sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [messages, materials]);
-  const visibleConversations = conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase()));
-  const current = messages.filter(message => (message.conversationId ?? LEGACY_ID) === conversationId);
-  const currentTitle = conversations.find(item => item.id === conversationId)?.title ?? '新对话';
+  }, [messages, materials, states]);
+  const visibleConversations = authenticated ? conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase())) : [];
+  const current = authenticated ? messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId) : [];
+  const currentQuiz = [...current].reverse().find(message => message.quiz);
+  // The quiz stays current for followups until the learner moves on: it is the
+  // latest turn, or later turns have not moved the learning state to another phase.
+  const lastMessage = current.at(-1);
+  const nextQuestionAvailable = !!currentQuiz?.revealed && ['completed', 'waiting'].includes(currentQuiz.status ?? '')
+    && ['completed', 'waiting'].includes(lastMessage?.status ?? '')
+    && (lastMessage === currentQuiz || !['learning', 'scope'].includes(states[conversationId]?.phase ?? ''));
+  const canRun = authenticated && loaded && appSession?.modelReady && !busy && !importing && !leaving;
+  const currentTitle = (authenticated && conversations.find(item => item.id === conversationId)?.title) || '新对话';
   const sourceDocument = source ? materials[conversationId]?.documents.find(d=>d.id===source.documentId) : undefined;
-  const cachedSource = sourceDocument?.chunks.find(c=>c.chunkId===source?.chunkId) ?? source;
-
-  function clearUserView() {
-    active.current?.controller.abort(); active.current = null;
-    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-    latestMessages.current = []; latestStates.current = {}; latestMaterials.current = {};
-    setMessages([]); setStates({}); setMaterials({}); setSource(null);
-    setBusy(false); setImporting(false); setLoaded(false); setStorageReady(false);
-    setInput(''); setConversationId(crypto.randomUUID());
-  }
-  function acceptSession(session: AppSession) {
-    if (identity.current && identity.current !== session.user.id) clearUserView();
-    identity.current = session.user.id;
-    setAppSession(session); setAuthenticated(true);
-  }
-  function invalidateSession() {
-    clearUserView(); identity.current = ''; setAppSession(null); setAuthenticated(false);
-  }
 
   async function refreshHealth() {
     try { const response = await fetch('/api/health'); if (!response.ok) throw new Error(); setHealth(await response.json()); }
     catch { setHealth(null); }
   }
+  function detachActiveTurn() {
+    const running = active.current;
+    active.current = null;
+    running?.controller.abort();
+    setBusy(false);
+    return running;
+  }
+  function revokeAccess() {
+    sessionGeneration.current++;
+    accessValid.current = false;
+    setAuthenticated(false);
+    setNotice(appSession?.mode==='old-site'?'应用会话已失效，请从破壁计划重新进入。本机学习记录会保留。':'应用会话已失效，请通过内部访问口令重新进入。本机学习记录会保留。');
+    const running = detachActiveTurn();
+    if (running) {
+      updateMessage(running.id, message => ({ ...message, status: 'failed', errorCode: 'AUTH_REQUIRED', error: '应用会话已失效，请重新进入后重试。' }));
+    }
+    setSource(null);
+  }
+  async function refreshSession(initial = false, recheck = false) {
+    if (!initial && !accessValid.current) return;
+    const generation = ++sessionGeneration.current;
+    const userId = appSession?.user.id;
+    try {
+      const response = await fetch('/api/session');
+      const data = response.ok ? await response.json() as AppSession : null;
+      if (generation !== sessionGeneration.current) return;
+      if(response.status===401&&initial&&!userId){setAuthenticated(false);return;}
+      if(response.status===403&&initial&&!userId){setAuthenticated(false);setNotice('当前账号尚未获得内测资格，请联系项目维护者。');return;}
+      if (response.status === 401 || response.status===403 || data && userId && data.user.id !== userId) { revokeAccess(); return; }
+      if (!data) throw new Error();
+      setAppSession(data);
+      if(data.mode==='internal')setEntryConfig({mode:'internal'});
+      if (recheck) setNotice(data.modelReady ? '模型已就绪，可点击重试继续原问题。' : '模型仍未配置，请联系维护者配置后再次检查。');
+      if (initial) { accessValid.current = true; setAuthenticated(true); }
+    } catch {
+      if (generation !== sessionGeneration.current) return;
+      setNotice('无法连接后端，请稍后重试。');
+    }
+  }
+  async function recheckReadiness() {
+    if (checkingReadiness || busy) return;
+    setCheckingReadiness(true);
+    setNotice('');
+    try { await refreshSession(false, true); }
+    finally { setCheckingReadiness(false); }
+  }
   useEffect(() => {
     void refreshHealth();
-    const entryError = new URLSearchParams(location.search).get('entryError');
-    if (entryError) {
-      setNotice(entryError === 'ENTRY_NOT_ALLOWED' ? '当前账号尚未获得内测资格，请联系项目维护者。' : entryError === 'OLD_SITE_UNAVAILABLE' ? '暂时无法连接破壁计划，请稍后重新进入。' : '本次进入授权未完成，请从破壁计划重新进入。');
-      history.replaceState(null, '', location.pathname);
-    }
-    void fetch('/api/session').then(async response => { if (response.ok) acceptSession(await response.json()); else if (response.status === 401) setAuthenticated(false); else throw new Error(); }).catch(() => { setAuthenticated(false); setNotice('无法连接后端，请检查 SSH 转发与服务。'); });
-    return () => { active.current?.controller.abort(); if (saveTimer.current) clearTimeout(saveTimer.current); };
+    const entryError=new URLSearchParams(location.search).get('entryError');
+    if(entryError){setNotice(entryError==='ENTRY_NOT_ALLOWED'?'当前账号尚未获得内测资格，请联系项目维护者。':entryError==='OLD_SITE_UNAVAILABLE'?'暂时无法连接破壁计划，请稍后重新进入。':'本次进入授权未完成，请从破壁计划重新进入。');history.replaceState(null,'',location.pathname);}
+    void refreshSession(true);
+    return () => { sessionGeneration.current++; active.current?.controller.abort(); };
   }, []);
+  useEffect(()=>{
+    if(authenticated!==false||entryConfig?.mode==='internal')return;
+    const controller=new AbortController();
+    void fetch('/api/auth/config',{signal:controller.signal}).then(async r=>{if(!r.ok)throw new Error();const entry:EntryConfig=await r.json();if(!['internal','old-site'].includes(entry.mode))throw new Error();setEntryConfig(entry);}).catch(()=>{if(!controller.signal.aborted)setNotice('暂时无法确认进入方式，请刷新页面重试。');});
+    return()=>controller.abort();
+  },[authenticated]);
+  useEffect(()=>{
+    if(appSession?.mode!=='old-site'||!authenticated)return;
+    const userId=appSession.user.id;const channel=new BroadcastChannel('cramameleon-auth');authChannel.current=channel;
+    channel.onmessage=event=>{if(event.data?.type==='signed-out'||event.data?.type==='identity'&&event.data.userId!==userId){preserveRecovery();revokeAccess();setAppSession(null);setInput('');setImporting(false);setNotice('账号已在其他页面切换或退出，请刷新后继续。');}};
+    channel.postMessage({type:'identity',userId});return()=>{channel.close();authChannel.current=null;};
+  },[appSession?.user.id,authenticated]);
   useEffect(() => {
-    if (authenticated !== false) return;
-    const controller = new AbortController();
-    void fetch('/api/auth/config', { signal: controller.signal }).then(async response => {
-      if (!response.ok) throw new Error();
-      const config: EntryConfig = await response.json();
-      if (!['internal', 'old-site'].includes(config.mode)) throw new Error();
-      if (!controller.signal.aborted) setEntryConfig(config);
-    }).catch(() => { if (!controller.signal.aborted) setNotice('暂时无法确认进入方式，请刷新页面重试。'); });
-    return () => controller.abort();
-  }, [authenticated]);
-  useEffect(() => {
-    if (appSession?.mode !== 'old-site' || !appSession.user.id) return;
-    const channel = new BroadcastChannel('cramameleon-auth');
-    authChannel.current = channel;
-    channel.onmessage = event => {
-      if (event.data?.type === 'signed-out' || event.data?.type === 'identity' && event.data.userId !== identity.current) {
-        invalidateSession(); setNotice('账号已在其他页面切换或退出，请刷新后继续。');
-      }
-    };
-    channel.postMessage({ type: 'identity', userId: appSession.user.id });
-    return () => { channel.close(); if (authChannel.current === channel) authChannel.current = null; };
+    // A user change or exit resets transient UI; a same-user expiry keeps it (#8).
+    detachActiveTurn();
+    setImporting(false); setInput(''); setSource(null); setQuery(''); setExitRisk(false);
   }, [appSession?.user.id]);
-  useEffect(() => {
-    if (!authenticated || !appSession) return;
-    let live = true;
-    setLoaded(false);
-    setStorageReady(false);
-    void loadData(appSession.user.id).then(saved => {
-      if (!live || identity.current !== appSession.user.id) return;
-      const list = saved.messages;
-      setStates(saved.states);
-      setMaterials(saved.materials ?? {});
-      setStorageReady(true);
-      setMessages(list);
-      setStorageStatus('已恢复本机记录');
-      const latest = [...list].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
-      if (latest) setConversationId(latest.conversationId ?? LEGACY_ID);
-      else { const id=Object.keys(saved.materials ?? {}).find(id=>saved.materials![id].documents.length);if(id)setConversationId(id); }
-    }).catch(() => { if (live) setStorageStatus('本机存储不可用，刷新后记录将丢失'); }).finally(() => { if (live) setLoaded(true); });
-    return () => { live = false; };
-  }, [authenticated, appSession?.user.id]);
-  useEffect(() => {
-    if (!loaded || !storageReady || !authenticated || !appSession) return;
-    if (saveTimer.current) return;
-    saveTimer.current = setTimeout(() => {
-      saveTimer.current = null;
-      void saveData(appSession.user.id, { version: 2, messages: latestMessages.current, states: latestStates.current, materials: latestMaterials.current }).then(() => setStorageStatus('已保存到当前浏览器')).catch(() => setStorageStatus('保存失败，刷新后可能丢失记录'));
-    }, 200);
-  }, [messages, states, materials, loaded, storageReady, authenticated, appSession?.user.id]);
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'instant', block: 'end' }); }, [messages, conversationId]);
+  useEffect(() => { following.current = true; }, [conversationId]);
+  useEffect(() => { const el = chat.current; if (el && following.current) el.scrollTop = el.scrollHeight; }, [messages, conversationId]);
   useEffect(() => {
     const el = textarea.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
-  }, [input, conversationId]);
+  }, [input, conversationId, authenticated]);
 
   async function authorize() {
+    if (authBusy) return;
+    const generation = ++sessionGeneration.current;
     setAuthBusy(true); setNotice('');
     try {
       const response = await fetch('/api/internal/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || '授权失败');
-      acceptSession(data); setAccessToken('');
+      if (generation !== sessionGeneration.current) return;
+      try { await flush(); }
+      catch {
+        if (generation !== sessionGeneration.current) return;
+        if (appSession && appSession.user.id !== data.user.id) {
+          setNotice('授权已成功，但原用户的记录未保存，暂时无法切换用户。请用原用户口令重新进入并保留此页面，待本机存储恢复后再切换。');
+          return;
+        }
+      }
+      if (generation !== sessionGeneration.current) return;
+      accessValid.current = true;
+      setAppSession(data); setAccessToken('');
+      setAuthenticated(true);
     } catch (error) { setNotice(error instanceof Error ? error.message : '模拟授权失败'); }
     finally { setAuthBusy(false); }
   }
-  function updateMessage(id: string, change: (message: UiMessage) => UiMessage) {
+  async function logout(exitAnyway = false) {
+    if (leaving || busy || importing) return;
+    setLeaving(true); setNotice('');
+    try {
+      if (exitAnyway) preserveRecovery();
+      else {
+        try { await flush(); }
+        catch { setExitRisk(true); return; }
+      }
+      const response = await fetch('/api/logout', { method: 'POST',headers:{'X-Cram-User':appSession?.user.id??''} });
+      if (!response.ok && response.status !== 401) throw new Error('退出失败');
+      sessionGeneration.current++; accessValid.current = false;
+      setAuthenticated(false); setAppSession(null); setSource(null); setExitRisk(false);
+      authChannel.current?.postMessage({type:'signed-out'});
+    } catch { setNotice('退出失败，请稍后重试。'); }
+    finally { setLeaving(false); }
+  }
+  function updateMessage(id: string, change: (message: ChatMessage) => ChatMessage) {
     setMessages(previous => previous.map(message => message.id === id ? change(message) : message));
   }
-  async function run(text: string, retryMessage?: UiMessage, action?: AgentAction) {
-    if (!text.trim() || importing || active.current || !loaded || !appSession?.modelReady) return;
+  async function run(text: string, retryMessage?: ChatMessage, action?: AgentAction) {
+    if (!text.trim() || !accessValid.current || !authenticated || importing || leaving || active.current || !loaded || !appSession?.modelReady) return;
+    sessionGeneration.current++;
     const id = crypto.randomUUID();
     const controller = new AbortController();
     const now = Date.now();
     const userMessageId = retryMessage?.replyTo ?? crypto.randomUUID();
-    const history = buildHistory(messages, conversationId, retryMessage ? userMessageId : undefined);
-    active.current = { id, controller }; setBusy(true); setInput(''); setNotice('');
-    setMessages(previous => [...previous.filter(m => m.id !== retryMessage?.id),
-      ...(!retryMessage ? [{ id: userMessageId, role: 'user' as const, text: text.trim(), conversationId, createdAt: now }] : []),
-      { id, replyTo: userMessageId, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, conversationId, createdAt: now + 1 }]);
+    const documents = (materials[conversationId]?.documents ?? []).filter(d => materials[conversationId]?.selectedIds.includes(d.id));
+    const selectedMaterialIds = documents.map(d => d.id);
+    // #6 selects material-compatible complete turns; #7 then projects quiz records within budget.
+    const history = buildLearningHistory(scopedMessages(messages, conversationId, selectedMaterialIds, retryMessage ? userMessageId : undefined), conversationId);
+    let modelNotConfigured = false;
+    following.current = true;
+    active.current = { id, conversationId, controller }; setBusy(true); setInput(''); setNotice('');
+    setMessages(previous => [...previous.filter(m => m.id !== retryMessage?.id).map(m => m.id === userMessageId ? { ...m, selectedMaterialIds } : m),
+      ...(!retryMessage ? [{ id: userMessageId, role: 'user' as const, text: text.trim(), conversationId, createdAt: now, selectedMaterialIds }] : []),
+      { id, replyTo: userMessageId, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, conversationId, createdAt: now + 1, selectedMaterialIds }]);
     try {
-      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents: (materials[conversationId]?.documents ?? []).filter(d=>materials[conversationId]?.selectedIds.includes(d.id)), state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
+      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents, state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
         if (active.current?.id !== id || event.turnId !== id || event.sessionId !== conversationId) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         if (event.type === 'state_update') { setStates(previous => ({ ...previous, [conversationId]: event.state })); continue; }
-        if (event.type === 'error' && ['AUTH_REQUIRED', 'ENTRY_NOT_ALLOWED', 'SESSION_CHANGED'].includes(event.code)) {
-          invalidateSession(); setNotice(event.code === 'SESSION_CHANGED' ? '账号已在其他页面切换，请刷新后继续。' : '应用会话已失效，请从入口重新进入。'); continue;
+        if (event.type === 'error' && ['AUTH_REQUIRED','SESSION_CHANGED','ENTRY_NOT_ALLOWED'].includes(event.code)) { revokeAccess(); continue; }
+        if (event.type === 'error' && event.code === 'MODEL_NOT_CONFIGURED') {
+          modelNotConfigured = true;
+          setAppSession(previous => previous ? { ...previous, modelReady: false } : previous);
         }
         updateMessage(id, message => {
           switch (event.type) {
@@ -204,102 +286,84 @@ export function App() {
             case 'tool_status': return { ...message, logs: [...message.logs ?? [], event.message], modelRequests: (message.modelRequests ?? 0) + Number(event.category === 'model' && event.status === 'started'), toolCalls: (message.toolCalls ?? 0) + Number(event.category === 'tool' && event.status === 'started') };
             case 'quiz_ready': return { ...message, quiz: event.quiz };
             case 'sources_ready': return { ...message, sources: event.sources };
-            case 'error': return { ...message, error: event.message, errorCode: event.code };
+            case 'error': return { ...message, error: recoveryErrors[event.code] ?? event.message, errorCode: event.code };
             case 'done': return { ...message, status: event.status };
             default: return message;
           }
         });
       }
     } catch (error) {
-      updateMessage(id, message => ({ ...message, status: controller.signal.aborted ? 'cancelled' : 'failed', error: controller.signal.aborted ? undefined : error instanceof Error ? error.message : '运行失败' }));
+      if (active.current?.id === id) updateMessage(id, message => ({ ...message, status: controller.signal.aborted ? 'cancelled' : 'failed', error: controller.signal.aborted ? undefined : error instanceof Error ? error.message : '运行失败' }));
     } finally {
-      if (active.current?.id === id) { active.current = null; setBusy(false); }
-      void refreshHealth();
-      void fetch('/api/session').then(async response => { if (response.ok) acceptSession(await response.json()); }).catch(() => undefined);
+      if (active.current?.id === id) {
+        active.current = null; setBusy(false);
+        void refreshHealth();
+        if (!modelNotConfigured) void refreshSession();
+      }
     }
   }
+  function nextQuestion() {
+    if (nextQuestionAvailable) void run('请出下一题。', undefined, { type: 'next_question' });
+  }
   function stop() {
-    const running = active.current;
+    const running = detachActiveTurn();
     if (!running) return;
-    running.controller.abort();
     updateMessage(running.id, message => ({ ...message, status: 'cancelled' }));
   }
-  async function copy(message: UiMessage) {
+  async function copy(message: ChatMessage) {
     try { await navigator.clipboard.writeText(message.text); setCopiedId(message.id); setTimeout(() => setCopiedId(''), 1800); }
     catch { setNotice('浏览器未允许复制，请手动选择文字。'); }
   }
-  function retry(message: UiMessage) {
+  function retry(message: ChatMessage) {
     const index = current.findIndex(item => item.id === message.id);
-    const prompt = current[index - 1];
+    const prompt = message.replyTo ? current.find(item => item.id === message.replyTo) : current[index - 1];
     if (prompt?.role === 'user') void run(prompt.text, { ...message, replyTo: prompt.id });
   }
   function newConversation() {
-    if (busy || importing) return;
-    setConversationId(crypto.randomUUID()); setInput(''); setNotice(''); setSidebarOpen(false);
+    if (busy || importing || leaving || !loaded) return;
+    setConversationId(crypto.randomUUID()); setInput(''); setNotice(''); setSource(null); setSidebarOpen(false);
     setTimeout(() => textarea.current?.focus(), 0);
   }
   function openConversation(id: string) {
-    if (busy || importing) return;
-    setConversationId(id); setNotice(''); setSidebarOpen(false);
+    if (busy || importing || leaving || !loaded) return;
+    setConversationId(id); setNotice(''); setSource(null); setSidebarOpen(false);
   }
   function deleteConversation(id: string) {
-    if (busy || importing) return;
-    setMessages(previous => previous.filter(message => (message.conversationId ?? LEGACY_ID) !== id));
+    if (leaving || !loaded) return;
+    if (active.current?.conversationId === id) detachActiveTurn();
+    if (id === conversationId) setImporting(false);
+    setMessages(previous => previous.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) !== id));
     setStates(previous => { const next = { ...previous }; delete next[id]; return next; });
     setMaterials(previous => { const next = { ...previous }; delete next[id]; return next; });
     setSource(null);
     if (id === conversationId) setConversationId(crypto.randomUUID());
   }
 
-  if (!authenticated) return <div className="auth-screen">
-    <div className="auth-card">
-      <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
-      <h1>开始学习</h1>
-      <p>{entryConfig?.mode === 'old-site' ? '从破壁计划带着资料，开始这一次学习。' : '你的学习助手。直接提问即可。'}</p>
-      {entryConfig?.mode === 'internal' ? <>
-      <input className="search" type="password" autoComplete="current-password" aria-label="内部访问口令" placeholder="输入环境文件中的内部访问口令" value={accessToken} onChange={e => setAccessToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && accessToken && !authBusy) void authorize(); }}/>
-      <button className="primary-button" onClick={() => void authorize()} disabled={authBusy || authenticated === null || !accessToken}>{authenticated === null ? '检查会话中…' : authBusy ? '授权中…' : '进入学习空间'}</button>
-      <small>内部开发访问 · 仅通过 SSH 转发使用。旧站授权尚未接入。</small>
-      </> : entryConfig?.mode === 'old-site' && entryConfig.oldSiteEntryUrl ? <>
-        <a className="primary-button entry-link" href={entryConfig.oldSiteEntryUrl}>从破壁计划进入 <span aria-hidden="true">↗</span></a>
-        <small>使用已登录的破壁计划账号，无需另外注册。</small>
-      </> : <small role="status">正在检查进入方式…</small>}
-      {notice && <div role="alert" className="notice">{notice}</div>}
-    </div>
-  </div>;
-
+  if(authenticated===false&&entryConfig?.mode!=='internal')return <div className="auth-screen"><section className="auth-card"><img src={LOGO} alt="" className="brand-mark"/><h1>Cramameleon</h1><p>使用破壁计划账号进入学习空间</p>{notice&&<div role="alert" className="notice">{notice}</div>}{entryConfig?.mode==='old-site'?<a className="primary-button entry-link" href={entryConfig.oldSiteEntryUrl}>从破壁计划进入</a>:<p role="status">正在确认进入方式…</p>}<small>学习记录保存在当前浏览器，按账号隔离。</small></section></div>;
   return <div className={`app ${sidebarOpen ? 'sidebar-open' : ''}`}>
     <aside className="sidebar" aria-label="会话列表">
       <div className="sidebar-header">
-        <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
+        <div className="brand"><img className="brand-mark" src={LOGO} alt=""/><span>Cramameleon</span></div>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭侧边栏">×</button>
       </div>
-      <button className="new-chat" onClick={newConversation} disabled={busy || importing}><span>＋</span>新对话</button>
-      <input className="search" placeholder="搜索对话" value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索对话"/>
+      <button className="new-chat" onClick={newConversation} disabled={!authenticated || busy || importing || leaving || !loaded}><span>＋</span>新对话</button>
+      <input className="search" placeholder="搜索对话" value={authenticated && loaded ? query : ''} disabled={!authenticated} onChange={event => setQuery(event.target.value)} aria-label="搜索对话"/>
       <div className="sidebar-label">对话</div>
       <nav className="conversation-list">
-        {!visibleConversations.length && <div className="list-empty">{query ? '没有匹配的对话' : '还没有对话'}</div>}
+        {authenticated && !visibleConversations.length && <div className="list-empty">{query ? '没有匹配的对话' : '还没有对话'}</div>}
         {visibleConversations.map(item => <div key={item.id} className={`conversation-item ${item.id === conversationId ? 'active' : ''}`}>
-          <button className="conversation-main" disabled={(busy || importing) && item.id !== conversationId} onClick={() => openConversation(item.id)}>
+          <button className="conversation-main" disabled={leaving || !loaded || ((busy || importing) && item.id !== conversationId)} onClick={() => openConversation(item.id)}>
             <span className="conversation-title">{item.running && <span className="running-dot"/>}{item.title}</span>
             <span className="conversation-meta">{relativeTime(item.updatedAt)} · {item.count} 条</span>
           </button>
-          <button className="conversation-delete" disabled={busy || importing} onClick={() => deleteConversation(item.id)} aria-label={`删除对话 ${item.title}`} title="删除">×</button>
+          <button className="conversation-delete" disabled={leaving || !loaded} onClick={() => deleteConversation(item.id)} aria-label={`删除对话 ${item.title}`} title="删除">×</button>
         </div>)}
       </nav>
       <div className="sidebar-footer">
         <span className={`status-dot ${health?.status === 'ok' ? 'online' : 'offline'}`}/>
         <span>{health?.status === 'ok' ? '服务在线' : '后端待检查'}</span>
-        <small>{storageStatus}</small>
-        <button className="icon-button" disabled={busy || importing} onClick={async () => {
-          if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-          try {
-            if (appSession && loaded && storageReady) await saveData(appSession.user.id, { version: 2, messages: latestMessages.current, states: latestStates.current, materials: latestMaterials.current });
-            const response = await fetch('/api/logout', { method: 'POST', headers: { 'X-Cram-User': appSession?.user.id ?? '' } }); if (!response.ok && response.status !== 401) throw new Error('退出失败');
-            authChannel.current?.postMessage({ type: 'signed-out' });
-            invalidateSession();
-          } catch { setNotice('保存或退出失败，请稍后重试'); }
-        }}>退出</button>
+        {authenticated && <small role="status" aria-label="本机存储状态">{storageFailed ? '本机记录需要处理' : storageStatus}</small>}
+        {authenticated && appSession?.mode !== 'guest' && <button className="icon-button" disabled={busy || importing || leaving} onClick={() => void logout()}>退出</button>}
       </div>
     </aside>
     <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)}/>
@@ -308,73 +372,84 @@ export function App() {
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} aria-label="打开侧边栏">☰</button>
         <div className="topbar-title"><strong>{currentTitle}</strong></div>
+        <ThemeToggle/>
       </header>
 
-      {(states[conversationId]?.course || states[conversationId]?.progress) && <div className="learning-progress" aria-label="学习进度"><strong>{[states[conversationId]?.course, states[conversationId]?.chapter].filter(Boolean).join(' · ')}</strong><span>{states[conversationId]?.progress}</span></div>}
-      <section className="chat" aria-label="聊天记录" aria-live="polite">
+      {authenticated && (states[conversationId]?.course || states[conversationId]?.chapter || states[conversationId]?.progress) && <div className="learning-progress" aria-label="学习位置"><strong>{[states[conversationId]?.course, states[conversationId]?.chapter].filter(Boolean).join(' · ')}</strong><span>{states[conversationId]?.progress}</span></div>}
+      <section ref={chat} className="chat" aria-label="聊天记录" aria-live="polite" onScroll={event => { const el = event.currentTarget; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48; }}>
         <div className="chat-inner">
           {!current.length && <div className="empty">
             <div className="empty-icon">✳</div>
             <h2>今天想学点什么？</h2>
             <p>提问、理解概念、系统复习或者做题，都可以直接说。</p>
           </div>}
-          {current.map((message, index) => message.role === 'user'
+          {current.map((message, index) => {
+            const sources = [...new Map([...(message.sources ?? []), ...(message.quiz?.sources ?? [])].map(item => [JSON.stringify([item.documentId, item.chunkId]), item])).values()];
+            return message.role === 'user'
             ? <article key={message.id} className="msg user"><div className="bubble">{message.text}</div></article>
             : <article key={message.id} className="msg assistant">
-              <div className="msg-head"><span className="brand-mark small">C</span>{message.status && message.status !== 'completed' && <span className={`run-status ${message.status}`}>{statusText[message.status]}</span>}</div>
+              <div className="msg-head"><img className="brand-mark small" src={LOGO} alt=""/>{message.status && message.status !== 'completed' && <span className={`run-status ${displayStatus(message)}`}>{statusText[displayStatus(message)!]}</span>}</div>
               {!!message.logs?.length && <details className="tool-block">
                 <summary><span className="tool-icon">⚙</span><span>工具调用</span><span className="tool-count">{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary>
                 <ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol>
               </details>}
-              {message.text ? <div className="msg-text">{message.text}{message.status === 'running' && <span className="cursor"/>}</div> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
+              {message.text ? <Markdown className="msg-text" text={message.role === 'assistant' ? stripQuizRecords(message.text) : message.text} streaming={message.status === 'running'}/> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
               {message.error && <div role="alert" className="error-card">{message.error}</div>}
               {message.quiz && <div className="quiz">
                 <div className="quiz-top"><span>练习题</span><span>{message.quiz.origin === 'generated' ? '自编' : message.quiz.origin === 'adapted' ? '改编' : '真题'} · 单选题</span></div>
-                <h3>{message.quiz.question}</h3>
-                <div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, item => ({ ...item, selectedOption: option.id, revealed: true }))}><span className="option-key">{option.id}</span><span>{option.text}</span>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>
+                <h3><Markdown inline text={message.quiz.question}/></h3>
+                <div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed || leaving} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, item => ({ ...item, selectedOption: option.id, revealed: true }))}><span className="option-key">{option.id}</span><Markdown inline text={option.text}/>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>
                 {message.revealed
-                  ? <div className="quiz-feedback"><strong className={message.selectedOption === message.quiz.correctOptionId ? 'ok' : 'bad'}>{!message.selectedOption ? `正确答案：${message.quiz.correctOptionId}` : message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> {option.explanation}</p>)}</div>
-                  : <small className="quiz-hint">选择一个选项后显示答案与解析。<button onClick={() => updateMessage(message.id, item => ({ ...item, revealed: true }))}>看答案</button></small>}
+                  ? <div className="quiz-feedback"><strong className={!message.selectedOption ? undefined : message.selectedOption === message.quiz.correctOptionId ? 'ok' : 'bad'}>{!message.selectedOption ? `正确答案：${message.quiz.correctOptionId}` : message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> <Markdown inline text={option.explanation}/></p>)}</div>
+                  : <small className="quiz-hint">选择一个选项后显示答案与解析。<button disabled={leaving} onClick={() => updateMessage(message.id, item => ({ ...item, revealed: true }))}>看答案</button></small>}
               </div>}
-              {!!message.sources?.length && <div className="sources">{message.sources.map(item => <button key={item.documentId + ':' + item.chunkId} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
+              {!!sources.length && <div className="sources">{sources.map(item => <button key={JSON.stringify([item.documentId, item.chunkId])} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
               {message.status !== 'running' && <div className="msg-actions">
                 <button onClick={() => void copy(message)} disabled={!message.text}>{copiedId === message.id ? '已复制' : '复制'}</button>
-                {index === current.length - 1 && message.quiz && message.revealed && ['completed','waiting'].includes(message.status ?? '') && <button disabled={busy || importing} onClick={() => void run('请出下一题。', undefined, { type: 'next_question' })}>下一题</button>}
-                {index === current.length - 1 && !message.quiz && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={busy || importing} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
-                {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={busy || importing} onClick={() => retry(message)}>重试</button>}
+                {index === current.length - 1 && nextQuestionAvailable && <button disabled={!canRun} onClick={nextQuestion}>下一题</button>}
+                {index === current.length - 1 && !message.quiz && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={!canRun} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
+                {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={!canRun} onClick={() => retry(message)}>重试</button>}
               </div>}
-            </article>)}
-          <div ref={bottom}/>
+            </article>;
+          })}
         </div>
       </section>
 
       <footer className="composer-wrap">
-        {!appSession?.modelReady && <div role="alert" className="notice">模型尚未配置。请在服务器环境文件填写真实 API 密钥并重启服务。</div>}
-        {appSession && <div className="composer-hint">北京时间今日 token：{appSession.budget.used.toLocaleString()} / {appSession.budget.limit.toLocaleString()}（含预留）</div>}
-        <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy || importing} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {notice && <div role="alert" className="notice">{notice}</div>}
+        {authenticated === null && (notice
+          ? <button className="primary-button" type="button" onClick={() => { setNotice(''); void refreshSession(true); }}>重新连接</button>
+          : <div role="status" className="composer-hint">正在连接学习空间…</div>)}
+        {authenticated === false && <form className="composer access-form" onSubmit={event => { event.preventDefault(); if (accessToken && !authBusy) void authorize(); }}>
+          <input className="search" type="password" autoComplete="current-password" aria-label="内部访问口令" placeholder="输入内部访问口令" value={accessToken} onChange={event => setAccessToken(event.target.value)}/>
+          <button className="primary-button" type="submit" disabled={authBusy || !accessToken}>{authBusy ? '授权中…' : '进入学习空间'}</button>
+        </form>}
+        {authenticated && <>
+        {storageFailed && <div role="alert" className="notice">{storageStatus}<button onClick={retryStorage}>{readFailed ? '重试读取' : '重试保存'}</button></div>}
+        {!appSession?.modelReady && <div role="alert" className="notice">模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。此检查不会调用模型。<button type="button" disabled={checkingReadiness || busy} onClick={() => void recheckReadiness()}>{checkingReadiness ? '正在检查模型状态…' : '重新检查模型状态'}</button></div>}
+        {exitRisk && storageFailed && <div role="alert" className="notice">保存失败。仍然退出可能丢失未保存的修改；退出前会尽量保留当前用户的本机恢复副本。可重试保存，或自行选择仍然退出。<button disabled={busy || importing || leaving} onClick={() => void logout(true)}>仍然退出（可能丢失修改）</button><button disabled={leaving} onClick={() => setExitRisk(false)}>继续编辑</button></div>}
         <MaterialComposer
-          session={appSession}
+          session={loaded?appSession:null}
           key={`${appSession?.user.id}:${conversationId}`}
           scope={materials[conversationId] ?? { documents: [], selectedIds: [] }}
-          disabled={busy || importing || !loaded}
+          disabled={busy || importing || leaving || !loaded}
           onBusy={setImporting}
           onSource={setSource}
           onChange={scope => setMaterials(previous => ({ ...previous, [conversationId]: scope }))}
           onSubmit={() => void run(input)}
           actions={<>
             <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-            {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={importing || !input.trim() || !loaded || !appSession?.modelReady} aria-label="发送消息">↑</button>}
+            {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={!input.trim() || !canRun} aria-label="发送消息">↑</button>}
           </>}
         >
           <label className="sr-only" htmlFor="message-input">输入消息</label>
-          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={input} disabled={busy || importing || !loaded || !appSession?.modelReady} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
+          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={loaded ? input : ''} disabled={!canRun} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
         </MaterialComposer>
+        </>}
       </footer>
     </main>
 
-    {source && <div className="modal-backdrop" onClick={() => setSource(null)}><section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title" onClick={event => event.stopPropagation()}><button className="icon-button modal-close" onClick={() => setSource(null)} aria-label="关闭来源">×</button><div className="eyebrow">来源</div><h2 id="source-title">{source.title}</h2><p className="source-location">{source.location}</p><pre>{cachedSource?.text}</pre>{sourceDocument && <label>文本位置<select aria-label="文本位置" value={source.chunkId} onChange={e=>{const chunk=sourceDocument.chunks.find(c=>c.chunkId===e.target.value);if(chunk)setSource(chunk);}}>{sourceDocument.chunks.map(c=><option key={c.chunkId} value={c.chunkId}>{c.location}</option>)}</select></label>}</section></div>}
+    {authenticated && source && loaded && <SourceViewer source={source} document={sourceDocument} onClose={()=>setSource(null)}/>}
   </div>;
 }
 // TODO(ui): Full accessibility pass.
-// TODO(auth): Replace internal-only access with old-site one-time authorization code exchange.

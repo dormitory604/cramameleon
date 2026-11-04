@@ -1,34 +1,44 @@
+/* 色调沿用破壁计划（arxiv.jaison.ink）：奶油底色、樟树绿主色、暖墨文字。 */
 :root {
-  --bg: #ffffff;
-  --sidebar: #f7f7f8;
+  --bg: #fffbf5;
+  --sidebar: #faf6ee;
   --panel: #ffffff;
-  --hover: #ececee;
-  --active: #e4e4e7;
-  --border: #e4e4e7;
-  --text: #18181b;
-  --muted: #71717a;
-  --faint: #a1a1aa;
-  --accent: #18181b;
+  --hover: #f2eadc;
+  --active: #ece3d2;
+  --border: #ece3d2;
+  --text: #1b1a18;
+  --muted: #6e665b;
+  --faint: #908577;
+  --accent: #2d6a4f;
   --accent-text: #ffffff;
-  --user-bubble: #f4f4f5;
-  --code-bg: #fafafa;
-  --ok: #16a34a;
-  --ok-bg: #f0fdf4;
-  --bad: #dc2626;
-  --bad-bg: #fef2f2;
-  --warn: #d97706;
+  --user-bubble: #f2eadc;
+  --code-bg: #faf6ee;
+  --ok: #3f8e5c;
+  --ok-bg: #eef6f0;
+  --bad: #c8364e;
+  --bad-bg: #feeded;
+  --warn: #d86519;
+  --link: #3d6890;
   --radius: 12px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
 }
+/* 主题：默认跟随系统；html[data-theme] 为用户手动选择的浅色 / 深色。深色为同一暖色系的推演。 */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #18181b; --sidebar: #111113; --panel: #1f1f23; --hover: #27272a; --active: #2f2f33;
-    --border: #2f2f33; --text: #f4f4f5; --muted: #a1a1aa; --faint: #71717a;
-    --accent: #f4f4f5; --accent-text: #18181b; --user-bubble: #27272a; --code-bg: #1c1c1f;
-    --ok-bg: #052e16; --bad-bg: #2a0f0f;
+  :root:not([data-theme="light"]) {
+    --bg: #1b1a18; --sidebar: #151412; --panel: #24221f; --hover: #2e2b27; --active: #3f3a33;
+    --border: #36322c; --text: #faf6ee; --muted: #b8ae9f; --faint: #908577;
+    --accent: #6fb081; --accent-text: #0d2418; --user-bubble: #2e2b27; --code-bg: #201e1b;
+    --ok: #6fb081; --ok-bg: #143424; --bad: #f08a96; --bad-bg: #3a1519; --warn: #ff9a48; --link: #a4bcd3;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1a18; --sidebar: #151412; --panel: #24221f; --hover: #2e2b27; --active: #3f3a33;
+  --border: #36322c; --text: #faf6ee; --muted: #b8ae9f; --faint: #908577;
+  --accent: #6fb081; --accent-text: #0d2418; --user-bubble: #2e2b27; --code-bg: #201e1b;
+  --ok: #6fb081; --ok-bg: #143424; --bad: #f08a96; --bad-bg: #3a1519; --warn: #ff9a48; --link: #a4bcd3;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -40,8 +50,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* Brand */
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
-.brand-mark { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; }
-.brand-mark.small { width: 20px; height: 20px; border-radius: 6px; font-size: 11px; }
+.brand-mark { flex: none; display: block; width: 26px; height: 26px; border-radius: 8px; object-fit: cover; }
+.brand-mark.small { width: 22px; height: 22px; border-radius: 7px; }
 .icon-button { border: 0; background: transparent; width: 32px; height: 32px; border-radius: 8px; font-size: 18px; color: var(--muted); }
 .icon-button:hover { background: var(--hover); color: var(--text); }
 .mobile-only { display: none; }
@@ -82,6 +92,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .topbar { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--border); flex: none; }
 .topbar-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .topbar-title strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.theme-toggle { flex: none; font-size: 16px; }
 .topbar-title span { color: var(--faint); font-size: 12.5px; white-space: nowrap; }
 .chat { flex: 1; overflow-y: auto; min-height: 0; }
 .chat-inner { max-width: 760px; margin: 0 auto; padding: 24px 20px 12px; display: flex; flex-direction: column; gap: 20px; }
@@ -101,8 +112,38 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .run-status.running { color: var(--ok); }
 .run-status.failed, .run-status.limited { color: var(--bad); }
 .run-status.cancelled, .run-status.interrupted { color: var(--warn); }
-.msg-text { white-space: pre-wrap; word-break: break-word; line-height: 1.7; }
-.cursor { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--text); animation: blink 1s steps(1) infinite; }
+.msg-text { word-break: break-word; line-height: 1.7; }
+.markdown.streaming > :last-child::after { content: ''; display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--text); animation: blink 1s steps(1) infinite; }
+
+/* Markdown */
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre, .markdown .md-table, .markdown .katex-display { margin: 0 0 .8em; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 1.2em 0 .5em; line-height: 1.35; font-weight: 600; }
+.markdown h1 { font-size: 1.4em; }
+.markdown h2 { font-size: 1.25em; }
+.markdown h3 { font-size: 1.1em; }
+.markdown h4 { font-size: 1em; }
+.markdown ul, .markdown ol { padding-left: 1.5em; }
+.markdown li + li { margin-top: .25em; }
+.markdown li > p { margin: 0; }
+.markdown li > ul, .markdown li > ol { margin: .25em 0 0; }
+.markdown ul.contains-task-list { list-style: none; padding-left: .25em; }
+.markdown a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.markdown strong { font-weight: 600; }
+.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.2em 0; }
+.markdown blockquote { padding: 2px 0 2px 12px; border-left: 3px solid var(--border); color: var(--muted); }
+.markdown code { font-family: var(--mono); font-size: .88em; padding: .1em .35em; border-radius: 5px; background: var(--hover); }
+.markdown pre { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--code-bg); overflow-x: auto; line-height: 1.55; }
+.markdown pre code { padding: 0; background: transparent; font-size: 12.5px; }
+.markdown .md-table { overflow-x: auto; }
+.markdown table { border-collapse: collapse; font-size: 13px; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; word-break: normal; overflow-wrap: normal; }
+.markdown th { background: var(--code-bg); font-weight: 600; }
+.markdown img { max-width: 100%; }
+.markdown .katex { font-size: 1.08em; }
+.markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.markdown.inline .katex-display { display: inline-block; margin: 0; }
 .thinking { display: flex; gap: 4px; padding: 6px 0; }
 .thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: pulse 1.2s infinite; }
 .thinking span:nth-child(2) { animation-delay: .2s; }
@@ -123,7 +164,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .msg-actions button { border: 0; background: transparent; padding: 2px 8px; border-radius: 6px; font-size: 12px; color: var(--faint); }
 .msg-actions button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 
-.quiz { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; background: var(--panel); }
+.quiz { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; background: var(--panel); overflow-wrap: anywhere; }
+.quiz-option > .markdown { min-width: 0; }
 .quiz-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-weight: 500; }
 .quiz-top span:last-child { color: var(--faint); font-weight: 400; }
 .quiz h3 { margin: 6px 0 12px; font-size: 15px; font-weight: 600; }
@@ -166,15 +208,24 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .primary-button { margin-top: 8px; padding: 10px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 500; }
 .entry-link { display: flex; justify-content: center; align-items: center; gap: 8px; text-decoration: none; }
 .entry-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+/* Touch screens have no hover: keep session delete visible and large enough to tap. */
+@media (hover: none), (max-width: 760px) {
+  .conversation-main { padding-right: 40px; }
+  .conversation-delete { opacity: 1; width: 32px; height: 32px; }
+}
+
+.access-form { display: flex; gap: 8px; align-items: center; }
+.access-form .search { min-width: 0; margin: 0; }
+.primary-button { flex: none; padding: 8px 10px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 500; }
 
 /* Modal */
-.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .4); }
-.source-modal { position: relative; width: 100%; max-width: 560px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 14px; background: var(--panel); border: 1px solid var(--border); }
+.source-modal { width: calc(100% - 32px); max-width: 560px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 14px; background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+.source-modal::backdrop { background: rgb(0 0 0 / .4); }
 .modal-close { position: absolute; top: 12px; right: 12px; }
 .eyebrow { font-size: 12px; color: var(--faint); }
 .source-modal h2 { margin: 4px 0; font-size: 17px; }
 .source-location { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
-.source-modal pre { margin: 0; padding: 12px; border-radius: 9px; background: var(--code-bg); border: 1px solid var(--border); white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; }
+.source-modal pre { margin: 0; padding: 12px; border-radius: 9px; background: var(--code-bg); border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12.5px; }
 
 @keyframes pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 @keyframes blink { 50% { opacity: 0; } }
@@ -183,8 +234,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }
   .mobile-only { display: inline-grid; place-items: center; }
-  .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: 280px; transform: translateX(-100%); transition: transform .2s; }
-  .sidebar-open .sidebar { transform: none; }
+  /* Hidden (not just off screen) while closed, so Tab and screen readers skip the drawer. */
+  .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(280px, 85vw); transform: translateX(-100%); visibility: hidden; transition: transform .2s, visibility 0s .2s; }
+  .sidebar-open .sidebar { transform: none; visibility: visible; transition: transform .2s; }
   .sidebar-open .sidebar-scrim { display: block; position: fixed; inset: 0; z-index: 30; background: rgb(0 0 0 / .3); }
   .topbar { padding: 0 8px; gap: 6px; }
   .chat-inner { padding: 16px 16px 8px; }
@@ -217,7 +269,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .materials-panel button, .materials-panel select, .material-feedback button { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: inherit; }
 .material-warning { width: 100%; margin: 0; color: var(--muted); font-size: 12px; }
 .source-modal select { max-width: 100%; margin-top: 12px; }
-.remote-materials { width: min(760px, 100%); max-width: 760px; text-align: left; }
+.remote-materials { position: relative; width: calc(100% - 32px); max-width: 760px; text-align: left; }
 .remote-materials h3 { margin: 18px 0 8px; overflow-wrap: anywhere; }
 .remote-materials p { line-height: 1.6; }
 .remote-materials button:not(.modal-close), .remote-materials select, .remote-materials input:not([type=checkbox]) { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
@@ -239,3 +291,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .remote-confirm button.primary { background: var(--text); color: var(--panel); font-weight: 600; margin-top: 8px; }
 .remote-error { white-space: pre-wrap; }
 @media (max-width: 600px) { .remote-materials { padding: 24px 16px; } .remote-search input { order: 3; min-width: 100%; } }
+.source-modal select { max-width: 100%; margin: 0 0 12px 8px; }
+@media (max-width: 760px) {
+  /* Keep room for the conversation on short phones; the list scrolls inside its panel. */
+  .materials-panel { max-height: 24vh; }
+}

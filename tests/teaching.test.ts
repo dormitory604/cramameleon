@@ -31,6 +31,35 @@ test('published skills are whitelisted, versioned and cached, each has a complet
  assert.throws(()=>readSkill('study','toString'));
  assert.ok(teachingContent.prompts.router.includes('简单'));
 });
+test('review teaches conditional probability for independent events too, with readable conditions',()=>{
+ const {text}=readSkill('probability-review','review');
+ assert.match(text,/独立与否.*(?:适用|定义)|(?:适用|定义).*独立与否/);
+ assert.ok(text.includes('$P(B) > 0$'));
+ assert.ok(text.includes('$P(A\\mid B) = P(A)$'));
+ assert.ok(text.includes('$P(A\\cap B) = P(A)P(B)$'));
+ assert.ok(!text.includes('P(A|B)'));
+});
+
+test('concept publishes a worked Bayes base-rate example with both positive paths',()=>{
+ const {text}=readSkill('bayes-concept','concept');
+ assert.match(text,/P\(D\).*0\.01/);
+ assert.match(text,/P\(\+\\mid D\).*0\.99/);
+ assert.match(text,/P\(\+\\mid \\neg D\).*0\.01/);
+ assert.ok(text.includes('9900'));
+ assert.ok(text.includes('99+99'));
+ assert.ok(text.includes('\\dfrac{99}{198} = 50\\%'));
+ assert.ok(text.includes('$P(+) > 0$'));
+ assert.match(text,/先验|基础概率/);
+});
+
+test('base guidance distinguishes disjoint events from zero-probability overlap',()=>{
+ const {style}=teachingContent.prompts;
+ assert.ok(style.includes('$A\\cap B=\\varnothing$'));
+ assert.ok(style.includes('$P(A\\cap B)=0$'));
+ assert.match(style,/不能反推.*交集为空/);
+ assert.ok(style.includes('$P(A\\cup B)=P(A)+P(B)-P(A\\cap B)$'));
+});
+
 test('read Skill and course state persist only after successful turn; scope waits',async()=>{
  const s=scripted([call('read_skill',{name:'review'}),call('update_learning_state',{course:'概率论',chapter:'',progress:'选择复习部分',phase:'scope'}),text('先选复习部分')]);
  const events=await Array.fromAsync(new PiAgentAdapter(config,s.fetcher).run(input()));

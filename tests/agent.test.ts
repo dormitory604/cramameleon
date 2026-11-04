@@ -37,3 +37,27 @@ test('abort yields only cancelled terminal and no later content',async()=>{
   setTimeout(()=>controller.abort(),20);const events=await task;
   assert.equal(events.filter(e=>e.type==='done').length,1);assert.equal((events.at(-1) as any).status,'cancelled');assert.equal(events.filter(e=>e.type==='text_delta').length,0);
 });
+test('native reader error after partial text is a stream interruption, not a network error (#14)',async()=>{
+  let requests=0;
+  const fetcher=(async(_url,init)=>{
+    requests++;const body=JSON.parse(init!.body as string);const enc=new TextEncoder();
+    return new Response(new ReadableStream<Uint8Array>({async start(controller){
+      controller.enqueue(enc.encode('data: '+JSON.stringify({type:'start',requestId:body.requestId})+'\n\ndata: '+JSON.stringify({type:'text_delta',delta:'连接重置前已生成的文字'})+'\n\n'));
+      await new Promise(r=>setTimeout(r,10));controller.error(new TypeError('simulated connection reset'));
+    }}));
+  }) as typeof fetch;
+  const events=await Array.fromAsync(new PiAgentAdapter(config,fetcher).run(input()));
+  assert.equal(requests,1);
+  assert.deepEqual(events.filter(e=>e.type==='text_delta').map(e=>(e as any).delta),['连接重置前已生成的文字']);
+  const errors=events.filter(e=>e.type==='error');
+  assert.equal(errors.length,1);assert.equal((errors[0] as any).code,'MODEL_STREAM_INTERRUPTED');
+  assert.deepEqual(events.at(-1),{sessionId:'chat-a',turnId:'turn-a',type:'done',status:'failed'});
+});
+test('fetch rejection before any response stays NETWORK_ERROR (#14)',async()=>{
+  let requests=0;
+  const fetcher=(async()=>{requests++;throw new TypeError('Failed to fetch');}) as typeof fetch;
+  const events=await Array.fromAsync(new PiAgentAdapter(config,fetcher).run(input()));
+  assert.equal(requests,1);
+  assert.deepEqual(events.filter(e=>e.type==='error').map(e=>(e as any).code),['NETWORK_ERROR']);
+  assert.equal((events.at(-1) as any).status,'failed');
+});

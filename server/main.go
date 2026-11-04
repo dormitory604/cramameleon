@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	webpath "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 
 const contractVersion = "app.v1"
 const cookieName = "cram_session"
+const guestUserID = "guest/browser"
 
 type config struct {
 	bind, staticDir, dbPath, apiKey, model, accessToken, userID string
@@ -30,6 +32,7 @@ type config struct {
 	dailyBudget                                                 int64
 	maxOutput, maxInput                                         int
 	timeout                                                     time.Duration
+	allowGuest                                                  bool
 }
 type appServer struct {
 	cfg           config
@@ -67,9 +70,16 @@ func loadConfig() (config, error) {
 	if e != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		return c, fmt.Errorf("the application requires a loopback bind behind its trusted proxy")
 	}
+	switch os.Getenv("APP_ALLOW_GUEST") {
+	case "", "0":
+	case "1":
+		c.allowGuest = c.mode != "old-site"
+	default:
+		return c, fmt.Errorf("APP_ALLOW_GUEST must be 0 or 1")
+	}
 	switch c.mode {
 	case "internal":
-		if len(c.accessToken) < 24 || strings.Contains(strings.ToLower(c.accessToken), "replace") {
+		if !c.allowGuest && (len(c.accessToken) < 24 || strings.Contains(strings.ToLower(c.accessToken), "replace")) {
 			return c, fmt.Errorf("APP_ACCESS_TOKEN must be a random secret of at least 24 characters")
 		}
 	case "old-site":
@@ -79,7 +89,7 @@ func loadConfig() (config, error) {
 	default:
 		return c, fmt.Errorf("APP_ENV must be internal or old-site")
 	}
-	n, e := envInt("APP_DAILY_TOKEN_BUDGET", 100000)
+	n, e := envInt("APP_DAILY_TOKEN_BUDGET", 1_000_000)
 	if e != nil {
 		return c, e
 	}
@@ -141,11 +151,16 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	s := &appServer{cfg: cfg, store: db, client: &http.Client{Timeout: cfg.timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: "https://api.deepseek.com/chat/completions", slots: make(chan struct{}, 2)}
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// Only a reverse proxy on the application host may supply the client address.
+	if e := r.SetTrustedProxies([]string{"127.0.0.0/8", "::1"}); e != nil {
+		panic(e)
+	}
+	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
 	r.Use(gin.Recovery())
 	r.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Referrer-Policy", "no-referrer")
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			c.Header("Cache-Control", "no-store")
 		}
@@ -173,6 +188,10 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 		r.GET("/api/auth/old-site/callback", s.finishOldSiteAuth)
 	} else {
 		r.POST("/api/internal/session", func(c *gin.Context) {
+			if s.mode() == "guest" {
+				fail(c, 404, "NOT_IMPLEMENTED", "访客模式无需访问口令")
+				return
+			}
 			s.loginMu.Lock()
 			defer s.loginMu.Unlock()
 			if time.Since(s.loginWindow) > time.Minute {
@@ -215,6 +234,10 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	api.Use(s.authenticate)
 	api.GET("/session", s.session)
 	api.POST("/logout", func(c *gin.Context) {
+		if cfg.allowGuest {
+			c.Status(204)
+			return
+		}
 		token, _ := c.Cookie(cookieName)
 		if e := s.removeSession(c.Request.Context(), tokenHash(token)); e != nil {
 			fail(c, 503, "STORAGE_FAILED", "退出失败，请重试")
@@ -235,14 +258,14 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 			c.Status(405)
 			return
 		}
-		path := filepath.Clean("/" + c.Request.URL.Path)
+		path := webpath.Clean("/" + c.Request.URL.Path)
 		if path == "/" {
 			path = "/index.html"
 		}
 		if path == "/index.html" {
 			c.Header("Cache-Control", "no-cache")
 		}
-		full := filepath.Join(cfg.staticDir, strings.TrimPrefix(path, "/"))
+		full := filepath.Join(cfg.staticDir, filepath.FromSlash(strings.TrimPrefix(path, "/")))
 		info, e := os.Stat(full)
 		if e != nil || info.IsDir() {
 			c.Status(404)

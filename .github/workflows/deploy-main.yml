@@ -1,0 +1,38 @@
+name: Deploy main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cramameleon-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Pull and deploy main on the server
+        env:
+          FETCH_TOKEN: ${{ github.token }}
+          DEPLOY_KEY: ${{ secrets.CRAMAMELEON_DEPLOY_KEY }}
+          DEPLOY_TARGET: ${{ secrets.CRAMAMELEON_DEPLOY_TARGET }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.CRAMAMELEON_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ssh_dir="$(mktemp -d)"
+          printf '%s\n' "$DEPLOY_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          printf '%s\n' "$FETCH_TOKEN" | ssh -T \
+            -i "$ssh_dir/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$ssh_dir/known_hosts" -o HostKeyAlias=cramameleon-deploy \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            "$DEPLOY_TARGET" deploy-main

@@ -19,6 +19,8 @@ export function RemoteMaterials({ session, documents, initial, onClose, onImport
  const [quota, setQuota] = useState<Quota | null>(null); const [error, setError] = useState(''); const [progress, setProgress] = useState('');
  const [busy, setBusy] = useState(false); const [loading, setLoading] = useState(false); const [needsAuth, setNeedsAuth] = useState(false);
  const active = useRef<AbortController | null>(null); const metadata = useRef<AbortController | null>(null);
+ const dialog=useRef<HTMLDialogElement>(null);
+ useEffect(()=>{const previous=document.activeElement;const element=dialog.current!;element.showModal();return()=>{element.close();if(previous instanceof HTMLElement&&previous.isConnected)previous.focus();};},[]);
  const userId = session.user.id;
  function report(e: unknown) { setError(e instanceof Error ? e.message : '资料服务暂不可用'); if (e instanceof AppError && ['AUTH_REQUIRED', 'MATERIAL_AUTH_EXPIRED', 'SESSION_CHANGED', 'ENTRY_NOT_ALLOWED'].includes(e.code)) setNeedsAuth(true); }
  useEffect(() => () => { active.current?.abort(); metadata.current?.abort(); onBusy(false); }, []);
@@ -85,7 +87,7 @@ export function RemoteMaterials({ session, documents, initial, onClose, onImport
   } finally { if (active.current === controller) { active.current = null;setBusy(false);setProgress('');onBusy(false); } }
  }
  const canRead = resource?.availability === 'available' && (resource.kind === 'material' || selected.length > 0 && selected.length <= 20 && selected.every(id => items.some(item => item.id === id && item.supported)));
- return <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}><section className="source-modal remote-materials" role="dialog" aria-modal="true" aria-labelledby="remote-title" onClick={e => e.stopPropagation()} onKeyDown={e => { if (e.key === 'Escape' && !busy) onClose(); }}>
+ return <dialog ref={dialog} className="source-modal remote-materials" aria-labelledby="remote-title" onCancel={e=>{e.preventDefault();if(!busy)onClose();}} onClick={e=>{if(e.target!==e.currentTarget||busy)return;const r=e.currentTarget.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)onClose();}}>
   <button type="button" className="icon-button modal-close" aria-label="关闭课程资料" disabled={busy} onClick={onClose}>×</button>
   <div className="eyebrow">破壁计划</div><h2 id="remote-title">课程资料</h2>
   <p className="materials-hint">搜索与查看目录免费。文件在浏览器解析，提问时仅发送相关文本片段。</p>
@@ -104,5 +106,5 @@ export function RemoteMaterials({ session, documents, initial, onClose, onImport
    {results && <div className="remote-pagination"><button type="button" disabled={page === 1 || loading} onClick={() => setPage(n => n - 1)}>上一页</button><span>第 {page} 页 · 共 {results.total} 条</span><button type="button" disabled={!results.hasMore || loading} onClick={() => setPage(n => n + 1)}>下一页</button></div>}
   </>}
   {loading && <p role="status">正在加载资料…</p>}
- </section></div>;
+ </dialog>;
 }
