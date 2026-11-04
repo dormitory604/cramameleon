@@ -7,6 +7,7 @@ test('multi-session history, retry, local quiz feedback, persistence and delete'
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/health')return route.fulfill({json:{status:'ok'}});
+  if(path==='/api/auth/config')return route.fulfill({json:{mode:'internal'}});
   if(path==='/api/internal/session'){loggedIn=true;return route.fulfill({json:session});}
   if(path==='/api/session')return route.fulfill({status:loggedIn?200:401,json:loggedIn?session:{error:{code:'AUTH_REQUIRED'}}});
   if(path==='/api/model'){

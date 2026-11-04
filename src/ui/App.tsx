@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentAction, AppSession, ChatMessage, LearningState, MaterialScope, Source } from '../contracts/index.ts';
+import type { AgentAction, AppSession, ChatMessage, EntryConfig, LearningState, MaterialScope, Source } from '../contracts/index.ts';
 import { MaterialComposer } from './Materials.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildHistory } from '../agent/context.ts';
@@ -23,6 +23,7 @@ function relativeTime(time?: number) {
 export function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [appSession, setAppSession] = useState<AppSession | null>(null);
+  const [entryConfig, setEntryConfig] = useState<EntryConfig | null>(null);
   const [accessToken, setAccessToken] = useState('');
   const [states, setStates] = useState<Record<string, LearningState>>({});
   const [materials, setMaterials] = useState<Record<string, MaterialScope>>({});
@@ -49,6 +50,8 @@ export function App() {
   const latestMaterials = useRef(materials);
   latestMaterials.current = materials;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const identity = useRef('');
+  const authChannel = useRef<BroadcastChannel | null>(null);
   latestMessages.current = messages;
   latestStates.current = states;
 
@@ -74,22 +77,67 @@ export function App() {
   const sourceDocument = source ? materials[conversationId]?.documents.find(d=>d.id===source.documentId) : undefined;
   const cachedSource = sourceDocument?.chunks.find(c=>c.chunkId===source?.chunkId) ?? source;
 
+  function clearUserView() {
+    active.current?.controller.abort(); active.current = null;
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    latestMessages.current = []; latestStates.current = {}; latestMaterials.current = {};
+    setMessages([]); setStates({}); setMaterials({}); setSource(null);
+    setBusy(false); setImporting(false); setLoaded(false); setStorageReady(false);
+    setInput(''); setConversationId(crypto.randomUUID());
+  }
+  function acceptSession(session: AppSession) {
+    if (identity.current && identity.current !== session.user.id) clearUserView();
+    identity.current = session.user.id;
+    setAppSession(session); setAuthenticated(true);
+  }
+  function invalidateSession() {
+    clearUserView(); identity.current = ''; setAppSession(null); setAuthenticated(false);
+  }
+
   async function refreshHealth() {
     try { const response = await fetch('/api/health'); if (!response.ok) throw new Error(); setHealth(await response.json()); }
     catch { setHealth(null); }
   }
   useEffect(() => {
     void refreshHealth();
-    void fetch('/api/session').then(async response => { if (response.ok) { setAppSession(await response.json()); setAuthenticated(true); } else if (response.status === 401) setAuthenticated(false); else throw new Error(); }).catch(() => { setAuthenticated(false); setNotice('无法连接后端，请检查 SSH 转发与服务。'); });
+    const entryError = new URLSearchParams(location.search).get('entryError');
+    if (entryError) {
+      setNotice(entryError === 'ENTRY_NOT_ALLOWED' ? '当前账号尚未获得内测资格，请联系项目维护者。' : entryError === 'OLD_SITE_UNAVAILABLE' ? '暂时无法连接破壁计划，请稍后重新进入。' : '本次进入授权未完成，请从破壁计划重新进入。');
+      history.replaceState(null, '', location.pathname);
+    }
+    void fetch('/api/session').then(async response => { if (response.ok) acceptSession(await response.json()); else if (response.status === 401) setAuthenticated(false); else throw new Error(); }).catch(() => { setAuthenticated(false); setNotice('无法连接后端，请检查 SSH 转发与服务。'); });
     return () => { active.current?.controller.abort(); if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, []);
+  useEffect(() => {
+    if (authenticated !== false) return;
+    const controller = new AbortController();
+    void fetch('/api/auth/config', { signal: controller.signal }).then(async response => {
+      if (!response.ok) throw new Error();
+      const config: EntryConfig = await response.json();
+      if (!['internal', 'old-site'].includes(config.mode)) throw new Error();
+      if (!controller.signal.aborted) setEntryConfig(config);
+    }).catch(() => { if (!controller.signal.aborted) setNotice('暂时无法确认进入方式，请刷新页面重试。'); });
+    return () => controller.abort();
+  }, [authenticated]);
+  useEffect(() => {
+    if (appSession?.mode !== 'old-site' || !appSession.user.id) return;
+    const channel = new BroadcastChannel('cramameleon-auth');
+    authChannel.current = channel;
+    channel.onmessage = event => {
+      if (event.data?.type === 'signed-out' || event.data?.type === 'identity' && event.data.userId !== identity.current) {
+        invalidateSession(); setNotice('账号已在其他页面切换或退出，请刷新后继续。');
+      }
+    };
+    channel.postMessage({ type: 'identity', userId: appSession.user.id });
+    return () => { channel.close(); if (authChannel.current === channel) authChannel.current = null; };
+  }, [appSession?.user.id]);
   useEffect(() => {
     if (!authenticated || !appSession) return;
     let live = true;
     setLoaded(false);
     setStorageReady(false);
     void loadData(appSession.user.id).then(saved => {
-      if (!live) return;
+      if (!live || identity.current !== appSession.user.id) return;
       const list = saved.messages;
       setStates(saved.states);
       setMaterials(saved.materials ?? {});
@@ -124,8 +172,7 @@ export function App() {
       const response = await fetch('/api/internal/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || '授权失败');
-      setAppSession(data); setAccessToken('');
-      setAuthenticated(true);
+      acceptSession(data); setAccessToken('');
     } catch (error) { setNotice(error instanceof Error ? error.message : '模拟授权失败'); }
     finally { setAuthBusy(false); }
   }
@@ -148,7 +195,9 @@ export function App() {
         if (active.current?.id !== id || event.turnId !== id || event.sessionId !== conversationId) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         if (event.type === 'state_update') { setStates(previous => ({ ...previous, [conversationId]: event.state })); continue; }
-        if (event.type === 'error' && event.code === 'AUTH_REQUIRED') setNotice('应用会话已失效，请退出后重新进入。');
+        if (event.type === 'error' && ['AUTH_REQUIRED', 'ENTRY_NOT_ALLOWED', 'SESSION_CHANGED'].includes(event.code)) {
+          invalidateSession(); setNotice(event.code === 'SESSION_CHANGED' ? '账号已在其他页面切换，请刷新后继续。' : '应用会话已失效，请从入口重新进入。'); continue;
+        }
         updateMessage(id, message => {
           switch (event.type) {
             case 'text_delta': return { ...message, text: message.text + event.delta };
@@ -166,7 +215,7 @@ export function App() {
     } finally {
       if (active.current?.id === id) { active.current = null; setBusy(false); }
       void refreshHealth();
-      void fetch('/api/session').then(async response => { if (response.ok) setAppSession(await response.json()); }).catch(() => undefined);
+      void fetch('/api/session').then(async response => { if (response.ok) acceptSession(await response.json()); }).catch(() => undefined);
     }
   }
   function stop() {
@@ -206,10 +255,15 @@ export function App() {
     <div className="auth-card">
       <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
       <h1>开始学习</h1>
-      <p>你的学习助手。直接提问即可。</p>
+      <p>{entryConfig?.mode === 'old-site' ? '从破壁计划带着资料，开始这一次学习。' : '你的学习助手。直接提问即可。'}</p>
+      {entryConfig?.mode === 'internal' ? <>
       <input className="search" type="password" autoComplete="current-password" aria-label="内部访问口令" placeholder="输入环境文件中的内部访问口令" value={accessToken} onChange={e => setAccessToken(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && accessToken && !authBusy) void authorize(); }}/>
       <button className="primary-button" onClick={() => void authorize()} disabled={authBusy || authenticated === null || !accessToken}>{authenticated === null ? '检查会话中…' : authBusy ? '授权中…' : '进入学习空间'}</button>
       <small>内部开发访问 · 仅通过 SSH 转发使用。旧站授权尚未接入。</small>
+      </> : entryConfig?.mode === 'old-site' && entryConfig.oldSiteEntryUrl ? <>
+        <a className="primary-button entry-link" href={entryConfig.oldSiteEntryUrl}>从破壁计划进入 <span aria-hidden="true">↗</span></a>
+        <small>使用已登录的破壁计划账号，无需另外注册。</small>
+      </> : <small role="status">正在检查进入方式…</small>}
       {notice && <div role="alert" className="notice">{notice}</div>}
     </div>
   </div>;
@@ -241,8 +295,9 @@ export function App() {
           if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
           try {
             if (appSession && loaded && storageReady) await saveData(appSession.user.id, { version: 2, messages: latestMessages.current, states: latestStates.current, materials: latestMaterials.current });
-            const response = await fetch('/api/logout', { method: 'POST' }); if (!response.ok && response.status !== 401) throw new Error('退出失败');
-            setAuthenticated(false); setAppSession(null); setMessages([]); setStates({}); setMaterials({}); setSource(null); setLoaded(false);
+            const response = await fetch('/api/logout', { method: 'POST', headers: { 'X-Cram-User': appSession?.user.id ?? '' } }); if (!response.ok && response.status !== 401) throw new Error('退出失败');
+            authChannel.current?.postMessage({ type: 'signed-out' });
+            invalidateSession();
           } catch { setNotice('保存或退出失败，请稍后重试'); }
         }}>退出</button>
       </div>
@@ -299,7 +354,7 @@ export function App() {
         <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy || importing} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {notice && <div role="alert" className="notice">{notice}</div>}
         <MaterialComposer
-          key={conversationId}
+          key={`${appSession?.user.id}:${conversationId}`}
           scope={materials[conversationId] ?? { documents: [], selectedIds: [] }}
           disabled={busy || importing || !loaded}
           onBusy={setImporting}

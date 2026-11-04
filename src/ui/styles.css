@@ -164,6 +164,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .auth-card small { color: var(--faint); font-size: 12px; text-align: center; }
 .auth-card .notice { margin: 0; }
 .primary-button { margin-top: 8px; padding: 10px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 500; }
+.entry-link { display: flex; justify-content: center; align-items: center; gap: 8px; text-decoration: none; }
+.entry-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 
 /* Modal */
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .4); }

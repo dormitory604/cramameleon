@@ -27,7 +27,9 @@ cd ..
 sh scripts/internal.sh start
 ```
 
-服务仅接受 `APP_ENV=internal` 和 loopback 监听；旧站授权尚未接入，因此不允许公开部署。应用会话有效 8 小时，SQLite 保存 token 哈希。更改开发者 ID 后旧身份会话失效，本地记录按新身份隔离。
+当前服务器仍使用 `APP_ENV=internal` 和 loopback 监听，不允许公开部署。代码已新增 `APP_ENV=old-site` 的授权发起、回调和真实用户会话；旧站对应接口及运行版本未提交改动尚待补齐，尚未完成真实跨站联调，不能把当前服务器视为旧站授权已上线。应用会话有效 8 小时，SQLite 保存 token 哈希。更改开发者 ID 后旧内部身份会话失效，本地记录按身份隔离。
+
+旧站模式配置见 `.env.old-site.example`，要求固定 HTTPS origin、独立客户端认证密钥、64 位十六进制凭据加密密钥和明确的旧站用户 ID 允许名单。此模式不注册内部口令入口，也不接受原内部身份的会话；无会话时只显示返回破壁计划的入口。旧站凭据加密保存在新后端，不进入浏览器和模型。部署与当前限制见 [旧站授权第一阶段](docs/旧站授权第一阶段-2026-11-05.md)。
 
 服务器路径为 `/home/ubuntu/cramameleon`。通过 SSH 转发访问：
 ```sh
@@ -61,12 +63,17 @@ sh scripts/internal.sh start
 | 接口 | 行为 |
 |---|---|
 | GET /api/health | 运行状态、契约版本、模型配置就绪状态 |
+| GET /api/auth/config | 当前进入方式；旧站模式只返回可信旧站入口地址 |
 | POST /api/internal/session | 校验内部访问口令，建立 HttpOnly 应用会话 |
+| GET /api/auth/old-site/start | 仅旧站模式：发起浏览器绑定的 state + S256 PKCE 流程 |
+| GET /api/auth/old-site/callback | 仅旧站模式：服务端兑换 code、验证准入、轮换应用会话 |
 | GET /api/session | 身份、模型就绪状态、限制、今日全局用量 |
 | POST /api/logout | 撤销应用会话 |
 | POST /api/model | 单次模型转发，POST fetch 消费 SSE |
 
 旧 `/api/demo/session` 已删除。主要错误码：AUTH_REQUIRED、MODEL_NOT_CONFIGURED、BUDGET_EXCEEDED、CONCURRENCY_LIMIT、DUPLICATE_REQUEST、CONTEXT_TOO_LARGE、MODEL_AUTH_FAILED、MODEL_BALANCE、MODEL_RATE_LIMIT、MODEL_TIMEOUT、MODEL_STREAM_INTERRUPTED、MODEL_OUTPUT_LIMIT、STORAGE_FAILED。
+
+旧站模式的浏览器业务 POST 还必须携带可信 Origin 与 `X-Cram-User`（当前应用用户 ID），防止其他标签页切换账号后把旧页面内容提交到新身份。入口与会话错误另有 `ENTRY_NOT_ALLOWED`、`SESSION_CHANGED`；旧站凭据过期只影响后续远程资料读取，应用会话内的核心学习仍可继续。
 
 预算在请求上游前，以请求 UTF-8 字节数+4096协议开销+输出上限保守预留；成功后按官方 usage 结算。断开/超时/崩溃而无可信 usage 时保留全部预留，不把未知消费当零。记录跨重启持久；每日额度按请求开始日归属。全局并发 2、单用户 1。相同 requestId 不会重复请求上游，手动重试必须使用新 ID。服务只记录请求 ID、状态、耗时和 token 数，不记录聊天、课件或密钥。不自动重试付费请求。
 

@@ -23,7 +23,11 @@ func openStore(path string) (*store, error) {
 	_, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
  CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS usage (request_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, day TEXT NOT NULL, reserved INTEGER NOT NULL, charged INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER, status TEXT NOT NULL);
- CREATE INDEX IF NOT EXISTS usage_day ON usage(day);`)
+ CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
+ CREATE TABLE IF NOT EXISTS app_users (id TEXT PRIMARY KEY, issuer TEXT NOT NULL, subject TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(issuer,subject));
+ CREATE TABLE IF NOT EXISTS auth_flows (state_hash TEXT PRIMARY KEY, browser_hash TEXT NOT NULL, verifier BLOB NOT NULL, context TEXT NOT NULL, expires INTEGER NOT NULL);
+ CREATE INDEX IF NOT EXISTS auth_flow_expiry ON auth_flows(expires);
+ CREATE TABLE IF NOT EXISTS entry_sessions (token_hash TEXT PRIMARY KEY, credential BLOB NOT NULL, credential_expires INTEGER NOT NULL, context TEXT NOT NULL);`)
 	if e != nil {
 		db.Close()
 		return nil, e

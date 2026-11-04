@@ -50,7 +50,7 @@ export class PiAgentAdapter implements AgentRunner {
    return {disabled,instruction};
   };
   const agent=new Agent({initialState:{systemPrompt:prompt,model,messages:history,tools},toolExecution:'sequential',
-   streamFn:createModelStream(input,{started:()=>emit({type:'tool_status',category:'model',status:'started',message:'正在生成回答'}),usage:usage=>emit({type:'usage',usage}),error:error=>{failed=error;},policy},this.fetcher),
+   streamFn:createModelStream(input,{started:()=>emit({type:'tool_status',category:'model',status:'started',message:'正在生成回答'}),usage:usage=>emit({type:'usage',usage}),error:error=>{failed=error;},policy},this.fetcher,this.config.user.id),
    prepareRequest:()=>{if(++requests>this.config.limits.maxToolCalls+1){limited=true;agent.abort();}},
    beforeToolCall:async({toolCall})=>{
     if(input.signal.aborted||limited||toolCalls>this.config.limits.maxToolCalls) return {block:true,reason:'本轮已停止或达到工具上限',terminate:true};

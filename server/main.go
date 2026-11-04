@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -27,6 +25,8 @@ const cookieName = "cram_session"
 
 type config struct {
 	bind, staticDir, dbPath, apiKey, model, accessToken, userID string
+	mode                                                        string
+	oldSite                                                     oldSiteConfig
 	dailyBudget                                                 int64
 	maxOutput, maxInput                                         int
 	timeout                                                     time.Duration
@@ -62,15 +62,22 @@ func envInt(key string, fallback int) (int, error) {
 }
 func loadConfig() (config, error) {
 	c := config{bind: env("APP_BIND", "127.0.0.1:18085"), staticDir: env("APP_STATIC_DIR", "dist"), dbPath: env("APP_DATABASE_PATH", "var/app.sqlite"), apiKey: os.Getenv("DEEPSEEK_API_KEY"), model: env("DEEPSEEK_MODEL", "deepseek-flash"), accessToken: os.Getenv("APP_ACCESS_TOKEN"), userID: env("APP_DEVELOPER_ID", "internal-developer"), timeout: 120 * time.Second}
-	if env("APP_ENV", "internal") != "internal" {
-		return c, fmt.Errorf("only internal mode is supported until old-site authorization is implemented")
-	}
+	c.mode = env("APP_ENV", "internal")
 	host, _, e := net.SplitHostPort(c.bind)
 	if e != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		return c, fmt.Errorf("internal mode requires a loopback bind")
+		return c, fmt.Errorf("the application requires a loopback bind behind its trusted proxy")
 	}
-	if len(c.accessToken) < 24 || strings.Contains(strings.ToLower(c.accessToken), "replace") {
-		return c, fmt.Errorf("APP_ACCESS_TOKEN must be a random secret of at least 24 characters")
+	switch c.mode {
+	case "internal":
+		if len(c.accessToken) < 24 || strings.Contains(strings.ToLower(c.accessToken), "replace") {
+			return c, fmt.Errorf("APP_ACCESS_TOKEN must be a random secret of at least 24 characters")
+		}
+	case "old-site":
+		if e := c.oldSite.load(); e != nil {
+			return c, e
+		}
+	default:
+		return c, fmt.Errorf("APP_ENV must be internal or old-site")
 	}
 	n, e := envInt("APP_DAILY_TOKEN_BUDGET", 100000)
 	if e != nil {
@@ -91,7 +98,7 @@ func loadConfig() (config, error) {
 	if c.maxInput > 180000 {
 		return c, fmt.Errorf("input limit exceeds 180000")
 	}
-	if !validID(c.model) || !validID(c.userID) {
+	if !validID(c.model) || c.mode == "internal" && !validID(c.userID) {
 		return c, fmt.Errorf("invalid model or developer ID")
 	}
 	return c, nil
@@ -120,7 +127,15 @@ func (s *appServer) session(c *gin.Context) {
 		fail(c, 503, "STORAGE_FAILED", "用量存储暂不可用")
 		return
 	}
-	c.JSON(200, gin.H{"mode": "internal", "user": gin.H{"id": s.cfg.userID, "name": "内部开发者"}, "modelReady": s.modelReady(), "model": s.cfg.model, "limits": gin.H{"maxToolCalls": 6, "timeoutSeconds": 120, "maxOutputTokens": s.cfg.maxOutput}, "budget": gin.H{"day": budgetDay(time.Now()), "limit": s.cfg.dailyBudget, "used": n}})
+	user, name := c.GetString("userID"), c.GetString("userName")
+	response := gin.H{"mode": s.mode(), "user": gin.H{"id": user, "name": name}, "modelReady": s.modelReady(), "model": s.cfg.model, "limits": gin.H{"maxToolCalls": 6, "timeoutSeconds": 120, "maxOutputTokens": s.cfg.maxOutput}, "budget": gin.H{"day": budgetDay(time.Now()), "limit": s.cfg.dailyBudget, "used": n}}
+	if s.mode() == "old-site" {
+		response["oldSite"] = gin.H{"status": c.GetString("materialAuthStatus")}
+		if context, ok := c.Get("initialContext"); ok {
+			response["initialContext"] = context
+		}
+	}
+	c.JSON(200, response)
 }
 func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	s := &appServer{cfg: cfg, store: db, client: &http.Client{Timeout: cfg.timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: "https://api.deepseek.com/chat/completions", slots: make(chan struct{}, 2)}
@@ -136,7 +151,11 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 		}
 		if c.Request.Method != http.MethodGet {
 			o := c.GetHeader("Origin")
-			if c.GetHeader("Sec-Fetch-Site") == "cross-site" || (o != "" && o != "http://"+c.Request.Host && o != "https://"+c.Request.Host) {
+			originRejected := o != "" && o != "http://"+c.Request.Host && o != "https://"+c.Request.Host
+			if s.mode() == "old-site" {
+				originRejected = o != cfg.oldSite.publicURL
+			}
+			if c.GetHeader("Sec-Fetch-Site") == "cross-site" || originRejected {
 				fail(c, 403, "ORIGIN_REJECTED", "请求来源不被允许")
 				return
 			}
@@ -144,69 +163,64 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 		c.Next()
 	})
 	r.GET("/api/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok", "mode": "internal", "contractVersion": contractVersion, "modelReady": s.modelReady(), "oldSite": false, "database": true})
+		c.JSON(200, gin.H{"status": "ok", "mode": s.mode(), "contractVersion": contractVersion, "modelReady": s.modelReady(), "oldSite": s.mode() == "old-site", "database": true})
 	})
-	r.POST("/api/internal/session", func(c *gin.Context) {
-		s.loginMu.Lock()
-		defer s.loginMu.Unlock()
-		if time.Since(s.loginWindow) > time.Minute {
-			s.loginFailures = 0
-			s.loginWindow = time.Now()
-		}
-		if s.loginFailures >= 10 {
-			fail(c, 429, "LOGIN_LIMIT", "尝试过多，请一分钟后再试")
-			return
-		}
-		var v struct {
-			AccessToken string `json:"accessToken"`
-		}
-		if decode(c, &v) != nil {
-			fail(c, 400, "INVALID_REQUEST", "请求格式不正确")
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(v.AccessToken), []byte(cfg.accessToken)) != 1 {
-			s.loginFailures++
-			fail(c, 401, "AUTH_REQUIRED", "内部访问口令不正确")
-			return
-		}
-		b := make([]byte, 32)
-		if _, e := rand.Read(b); e != nil {
-			fail(c, 500, "SESSION_FAILED", "无法创建会话")
-			return
-		}
-		token := hex.EncodeToString(b)
-		_, e := db.db.Exec("INSERT INTO sessions VALUES(?,?,?)", tokenHash(token), cfg.userID, time.Now().Add(8*time.Hour).Unix())
-		if e != nil {
-			fail(c, 503, "STORAGE_FAILED", "无法保存应用会话")
-			return
-		}
-		http.SetCookie(c.Writer, &http.Cookie{Name: cookieName, Value: token, Path: "/", MaxAge: 8 * 3600, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		s.session(c)
+	r.GET("/api/auth/config", func(c *gin.Context) {
+		c.JSON(200, gin.H{"mode": s.mode(), "oldSiteEntryUrl": cfg.oldSite.entryURL})
 	})
+	if s.mode() == "old-site" {
+		r.GET("/api/auth/old-site/start", s.startOldSiteAuth)
+		r.GET("/api/auth/old-site/callback", s.finishOldSiteAuth)
+	} else {
+		r.POST("/api/internal/session", func(c *gin.Context) {
+			s.loginMu.Lock()
+			defer s.loginMu.Unlock()
+			if time.Since(s.loginWindow) > time.Minute {
+				s.loginFailures = 0
+				s.loginWindow = time.Now()
+			}
+			if s.loginFailures >= 10 {
+				fail(c, 429, "LOGIN_LIMIT", "尝试过多，请一分钟后再试")
+				return
+			}
+			var v struct {
+				AccessToken string `json:"accessToken"`
+			}
+			if decode(c, &v) != nil {
+				fail(c, 400, "INVALID_REQUEST", "请求格式不正确")
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(v.AccessToken), []byte(cfg.accessToken)) != 1 {
+				s.loginFailures++
+				fail(c, 401, "AUTH_REQUIRED", "内部访问口令不正确")
+				return
+			}
+			token, e := randomToken()
+			if e != nil {
+				fail(c, 500, "SESSION_FAILED", "无法创建会话")
+				return
+			}
+			_, e = db.db.Exec("INSERT INTO sessions(token_hash,user_id,expires) VALUES(?,?,?)", tokenHash(token), cfg.userID, time.Now().Add(8*time.Hour).Unix())
+			if e != nil {
+				fail(c, 503, "STORAGE_FAILED", "无法保存应用会话")
+				return
+			}
+			s.setSessionCookie(c, token, 8*3600)
+			c.Set("userID", cfg.userID)
+			c.Set("userName", "内部开发者")
+			s.session(c)
+		})
+	}
 	api := r.Group("/api")
-	api.Use(func(c *gin.Context) {
-		token, e := c.Cookie(cookieName)
-		if e != nil {
-			fail(c, 401, "AUTH_REQUIRED", "请先输入内部访问口令")
-			return
-		}
-		var user string
-		e = db.db.QueryRow("SELECT user_id FROM sessions WHERE token_hash=? AND expires>?", tokenHash(token), time.Now().Unix()).Scan(&user)
-		if e != nil || user != cfg.userID {
-			fail(c, 401, "AUTH_REQUIRED", "应用会话已失效，请重新进入")
-			return
-		}
-		c.Set("userID", user)
-		c.Next()
-	})
+	api.Use(s.authenticate)
 	api.GET("/session", s.session)
 	api.POST("/logout", func(c *gin.Context) {
 		token, _ := c.Cookie(cookieName)
-		if _, e := db.db.Exec("DELETE FROM sessions WHERE token_hash=?", tokenHash(token)); e != nil {
+		if e := s.removeSession(c.Request.Context(), tokenHash(token)); e != nil {
 			fail(c, 503, "STORAGE_FAILED", "退出失败，请重试")
 			return
 		}
-		http.SetCookie(c.Writer, &http.Cookie{Name: cookieName, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		s.setSessionCookie(c, "", -1)
 		c.Status(204)
 	})
 	api.POST("/model", s.model)
@@ -252,7 +266,7 @@ func main() {
 	_, router := newServer(cfg, db)
 	server := &http.Server{Addr: cfg.bind, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	go func() {
-		log.Printf("Cramameleon internal listening on %s", cfg.bind)
+		log.Printf("Cramameleon %s listening on %s", cfg.mode, cfg.bind)
 		if e := server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
 			log.Fatal(e)
 		}
