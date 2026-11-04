@@ -3,18 +3,16 @@ import type { ChatMessage, Scenario, Source } from '../contracts/index.ts';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { loadMessages, saveMessages } from '../session/demoStore.ts';
 
-// 学习模式是纯前端概念，发送时映射到现有的后端演示场景。
-type Mode = 'qa' | 'concept' | 'system' | 'exam';
-const modes: { id: Mode; title: string; short: string; icon: string; description: string; scenario: Scenario; prompts: string[] }[] = [
-  { id: 'qa', title: '普通问答', short: '问答', icon: '◌', description: '直接提问，快速得到解答。', scenario: 'chat', prompts: ['这个 Demo 的整体架构是怎样的？', '前端和后端是如何通信的？'] },
-  { id: 'concept', title: '概念学习', short: '概念', icon: '◇', description: '围绕一个概念，讲清定义、例子与易错点。', scenario: 'chat', prompts: ['解释一下什么是流式响应。', '工具调用是什么意思？'] },
-  { id: 'system', title: '系统学习', short: '系统', icon: '▦', description: '按章节循序渐进，构建完整知识框架。', scenario: 'chat', prompts: ['帮我系统梳理 Agent 的工作流程。', '给我一份分步骤的学习计划。'] },
-  { id: 'exam', title: '模拟考试', short: '考试', icon: '✎', description: '出题、作答、即时反馈与解析。', scenario: 'quiz', prompts: ['给我出一道关于这个 Demo 架构的题。', '开始一次模拟考试。'] },
-];
-const modeOf = (id?: Mode) => modes.find(item => item.id === id) ?? modes[0];
+// 学习模式（普通问答 / 概念学习 / 系统学习 / 模拟考试）由模型根据提问自行选择，区别仅在于默认加载的
+// prompt 与 skill，属于 Agent 内部行为，界面上不展示。
+// TODO(router): 路由接入后删除此函数。当前 Demo 后端只认识固定场景，前端先用关键词把“出题/考试”
+// 类提问送到 quiz 场景，其余走 chat，仅用于让演示链路可走通。
+function demoScenario(text: string): Scenario {
+  return /考试|出题|题目|测验|测试我|考考|练习题|一道题/.test(text) ? 'quiz' : 'chat';
+}
 
 // 在不改动存储层的前提下，把所有会话的消息平铺保存，并用 conversationId 区分。
-type UiMessage = ChatMessage & { conversationId?: string; mode?: Mode; createdAt?: number };
+type UiMessage = ChatMessage & { conversationId?: string; createdAt?: number };
 type Health = { status: string; stats?: { active: number; requests: number; completed: number; cancelled: number } };
 const statusText: Record<string, string> = { running: '运行中', completed: '已完成', cancelled: '已停止', failed: '失败', limited: '达到上限', interrupted: '已中断' };
 const LEGACY_ID = 'legacy';
@@ -31,7 +29,6 @@ function relativeTime(time?: number) {
 export function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
-  const [mode, setMode] = useState<Mode>('qa');
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
   const [input, setInput] = useState('');
@@ -50,15 +47,13 @@ export function App() {
   const latestMessages = useRef(messages);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   latestMessages.current = messages;
-  const selected = modeOf(mode);
 
   const conversations = useMemo(() => {
-    const map = new Map<string, { id: string; title: string; mode: Mode; updatedAt: number; running: boolean; count: number }>();
+    const map = new Map<string, { id: string; title: string; updatedAt: number; running: boolean; count: number }>();
     for (const message of messages) {
       const id = message.conversationId ?? LEGACY_ID;
-      const entry = map.get(id) ?? { id, title: '', mode: message.mode ?? 'qa', updatedAt: 0, running: false, count: 0 };
+      const entry = map.get(id) ?? { id, title: '', updatedAt: 0, running: false, count: 0 };
       if (!entry.title && message.role === 'user') entry.title = message.text.slice(0, 40);
-      if (message.mode) entry.mode = message.mode;
       entry.updatedAt = Math.max(entry.updatedAt, message.createdAt ?? 0);
       entry.running ||= message.status === 'running';
       entry.count += 1;
@@ -88,7 +83,7 @@ export function App() {
       setMessages(list);
       setStorageStatus('已恢复本机记录');
       const latest = [...list].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
-      if (latest) { setConversationId(latest.conversationId ?? LEGACY_ID); setMode(latest.mode ?? 'qa'); }
+      if (latest) setConversationId(latest.conversationId ?? LEGACY_ID);
     }).catch(() => { if (live) setStorageStatus('本机存储不可用，刷新后记录将丢失'); }).finally(() => { if (live) setLoaded(true); });
     return () => { live = false; };
   }, [authenticated]);
@@ -120,16 +115,16 @@ export function App() {
   function updateMessage(id: string, change: (message: UiMessage) => UiMessage) {
     setMessages(previous => previous.map(message => message.id === id ? change(message) : message));
   }
-  async function run(text: string, nextMode: Mode = mode) {
+  async function run(text: string) {
     if (!text.trim() || active.current || !loaded) return;
     const id = crypto.randomUUID();
     const controller = new AbortController();
-    const scenario = modeOf(nextMode).scenario;
+    const scenario = demoScenario(text);
     const now = Date.now();
     active.current = { id, controller }; setBusy(true); setInput(''); setNotice('');
     setMessages(previous => [...previous,
-      { id: crypto.randomUUID(), role: 'user', text: text.trim(), scenario, mode: nextMode, conversationId, createdAt: now },
-      { id, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, scenario, mode: nextMode, conversationId, createdAt: now + 1 }]);
+      { id: crypto.randomUUID(), role: 'user', text: text.trim(), scenario, conversationId, createdAt: now },
+      { id, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, scenario, conversationId, createdAt: now + 1 }]);
     try {
       for await (const event of new PiAgentAdapter().run({ sessionId: 'demo-developer', turnId: id, text, scenario, signal: controller.signal })) {
         if (active.current?.id !== id || event.turnId !== id) continue;
@@ -165,16 +160,16 @@ export function App() {
   function retry(message: UiMessage) {
     const index = current.findIndex(item => item.id === message.id);
     const prompt = current[index - 1];
-    if (prompt?.role === 'user') void run(prompt.text, message.mode ?? mode);
+    if (prompt?.role === 'user') void run(prompt.text);
   }
   function newConversation() {
     if (busy) return;
     setConversationId(crypto.randomUUID()); setInput(''); setNotice(''); setSidebarOpen(false);
     setTimeout(() => textarea.current?.focus(), 0);
   }
-  function openConversation(id: string, lastMode: Mode) {
+  function openConversation(id: string) {
     if (busy) return;
-    setConversationId(id); setMode(lastMode); setNotice(''); setSidebarOpen(false);
+    setConversationId(id); setNotice(''); setSidebarOpen(false);
   }
   function deleteConversation(id: string) {
     if (busy) return;
@@ -186,7 +181,7 @@ export function App() {
     <div className="auth-card">
       <div className="brand"><span className="brand-mark">C</span><span>Cramameleon</span></div>
       <h1>开始学习</h1>
-      <p>普通问答、概念学习、系统学习、模拟考试，四种模式随时切换。</p>
+      <p>你的学习助手。直接提问即可。</p>
       <button className="primary-button" onClick={() => void authorize()} disabled={authBusy || authenticated === null}>{authenticated === null ? '检查会话中…' : authBusy ? '授权中…' : '进入（模拟授权）'}</button>
       <small>内部 Demo 授权，不连接旧站账号。</small>
       {notice && <div role="alert" className="notice">{notice}</div>}
@@ -205,9 +200,9 @@ export function App() {
       <nav className="conversation-list">
         {!visibleConversations.length && <div className="list-empty">{query ? '没有匹配的对话' : '还没有对话'}</div>}
         {visibleConversations.map(item => <div key={item.id} className={`conversation-item ${item.id === conversationId ? 'active' : ''}`}>
-          <button className="conversation-main" disabled={busy && item.id !== conversationId} onClick={() => openConversation(item.id, item.mode)}>
+          <button className="conversation-main" disabled={busy && item.id !== conversationId} onClick={() => openConversation(item.id)}>
             <span className="conversation-title">{item.running && <span className="running-dot"/>}{item.title}</span>
-            <span className="conversation-meta"><span className={`mode-tag mode-${item.mode}`}>{modeOf(item.mode).short}</span>{relativeTime(item.updatedAt)} · {item.count} 条</span>
+            <span className="conversation-meta">{relativeTime(item.updatedAt)} · {item.count} 条</span>
           </button>
           <button className="conversation-delete" disabled={busy} onClick={() => deleteConversation(item.id)} aria-label={`删除对话 ${item.title}`} title="删除">×</button>
         </div>)}
@@ -223,25 +218,20 @@ export function App() {
     <main className="main">
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} aria-label="打开侧边栏">☰</button>
-        <div className="topbar-title"><strong>{currentTitle}</strong><span>{selected.title}</span></div>
-        <div className="mode-switch" role="tablist" aria-label="学习模式">
-          {modes.map(item => <button key={item.id} role="tab" aria-selected={mode === item.id} className={mode === item.id ? 'active' : ''} disabled={busy} onClick={() => setMode(item.id)} title={item.description}><span>{item.icon}</span>{item.title}</button>)}
-        </div>
+        <div className="topbar-title"><strong>{currentTitle}</strong></div>
       </header>
 
       <section className="chat" aria-label="聊天记录" aria-live="polite">
         <div className="chat-inner">
           {!current.length && <div className="empty">
-            <div className="empty-icon">{selected.icon}</div>
-            <h2>{selected.title}</h2>
-            <p>{selected.description}</p>
-            <div className="suggestions">{selected.prompts.map(prompt => <button key={prompt} disabled={busy || !loaded} onClick={() => void run(prompt)}>{prompt}<span>↗</span></button>)}</div>
-            <small>当前为演示环境，回复为固定脚本。</small>
+            <div className="empty-icon">✳</div>
+            <h2>今天想学点什么？</h2>
+            <p>提问、理解概念、系统复习或者做题，都可以直接说。</p>
           </div>}
           {current.map((message, index) => message.role === 'user'
             ? <article key={message.id} className="msg user"><div className="bubble">{message.text}</div></article>
             : <article key={message.id} className="msg assistant">
-              <div className="msg-head"><span className="brand-mark small">C</span><span className={`mode-tag mode-${message.mode ?? 'qa'}`}>{modeOf(message.mode).title}</span>{message.status && message.status !== 'completed' && <span className={`run-status ${message.status}`}>{statusText[message.status]}</span>}</div>
+              <div className="msg-head"><span className="brand-mark small">C</span>{message.status && message.status !== 'completed' && <span className={`run-status ${message.status}`}>{statusText[message.status]}</span>}</div>
               {!!message.logs?.length && <details className="tool-block" open={message.status === 'running'}>
                 <summary><span className="tool-icon">⚙</span><span>工具调用</span><span className="tool-count">{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary>
                 <ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol>
@@ -249,7 +239,7 @@ export function App() {
               {message.text ? <div className="msg-text">{message.text}{message.status === 'running' && <span className="cursor"/>}</div> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
               {message.error && <div role="alert" className="error-card">{message.error}</div>}
               {message.quiz && <div className="quiz">
-                <div className="quiz-top"><span>模拟考试</span><span>单选题</span></div>
+                <div className="quiz-top"><span>练习题</span><span>单选题</span></div>
                 <h3>{message.quiz.question}</h3>
                 <div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, item => ({ ...item, selectedOption: option.id, revealed: true }))}><span className="option-key">{option.id}</span><span>{option.text}</span>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>
                 {message.revealed
@@ -270,11 +260,8 @@ export function App() {
         {notice && <div role="alert" className="notice">{notice}</div>}
         <form className="composer" onSubmit={event => { event.preventDefault(); void run(input); }}>
           <label className="sr-only" htmlFor="message-input">输入消息</label>
-          <textarea ref={textarea} id="message-input" rows={1} placeholder={`${selected.title}：${selected.prompts[0]}`} value={input} disabled={busy || !loaded} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
+          <textarea ref={textarea} id="message-input" rows={1} placeholder="问点什么，或者说“考考我”…" value={input} disabled={busy || !loaded} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
           <div className="composer-bar">
-            <label className="mode-select"><span>{selected.icon}</span>
-              <select value={mode} disabled={busy} onChange={event => setMode(event.target.value as Mode)} aria-label="切换学习模式">{modes.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
-            </label>
             <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
             {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={!input.trim() || !loaded} aria-label="发送消息">↑</button>}
           </div>
@@ -285,5 +272,5 @@ export function App() {
     {source && <div className="modal-backdrop" onClick={() => setSource(null)}><section className="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title" onClick={event => event.stopPropagation()}><button className="icon-button modal-close" onClick={() => setSource(null)} aria-label="关闭来源">×</button><div className="eyebrow">来源</div><h2 id="source-title">{source.title}</h2><p className="source-location">{source.location}</p><pre>{source.text}</pre></section></div>}
   </div>;
 }
-// TODO(ui): Course/material selection, real mode-specific prompts and full accessibility pass.
+// TODO(ui): Course/material selection,  full accessibility pass.
 // TODO(auth): Replace simulated entrance with old-site one-time authorization code exchange.
