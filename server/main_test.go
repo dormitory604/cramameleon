@@ -265,3 +265,54 @@ func TestMissingConfigAndInvalidTools(t *testing.T) {
 		t.Fatal(code)
 	}
 }
+
+func TestTeachingToolDeclarationsAndRetiredHistory(t *testing.T) {
+	v := request("teaching")
+	var skill wireTool
+	_ = json.Unmarshal([]byte(`{"type":"function","function":{"name":"read_skill","description":"skill","parameters":{"type":"object"}}}`), &skill)
+	v.Tools = []wireTool{skill}
+	if e := validateRequest(v); e != nil {
+		t.Fatal(e)
+	}
+	call := toolCall{ID: "skill-call", Type: "function"}
+	call.Function.Name = "read_skill"
+	call.Function.Arguments = `{"name":"review"}`
+	v.Messages = append(v.Messages, wireMessage{Role: "assistant", ToolCalls: []toolCall{call}}, wireMessage{Role: "tool", ToolCallID: "skill-call", Content: "published skill"})
+	v.Tools = nil
+	if e := validateRequest(v); e != nil {
+		t.Fatal("retired tool history rejected", e)
+	}
+	v.Tools = []wireTool{skill, skill}
+	if validateRequest(v) == nil {
+		t.Fatal("duplicate declarations accepted")
+	}
+	v.Tools[0].Function.Name = "shell"
+	if validateRequest(v) == nil {
+		t.Fatal("unsafe tool accepted")
+	}
+}
+func TestMultipleTeachingCallsAndUndeclaredTool(t *testing.T) {
+	s, srv, c := setup(t)
+	login(t, srv, c)
+	mock(t, s, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"s1\",\"function\":{\"name\":\"read_skill\",\"arguments\":\"{\\\"name\\\":\\\"review\\\"}\"}},{\"index\":1,\"id\":\"s2\",\"function\":{\"name\":\"update_learning_state\",\"arguments\":\"{\\\"course\\\":\\\"probability\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\ndata: [DONE]\n\n")
+	})
+	v := request("batch")
+	for _, name := range []string{"read_skill", "update_learning_state"} {
+		var tool wireTool
+		tool.Type = "function"
+		tool.Function.Name = name
+		tool.Function.Parameters = json.RawMessage(`{"type":"object"}`)
+		v.Tools = append(v.Tools, tool)
+	}
+	_, body := post(t, srv, c, v)
+	if strings.Count(body, `"type":"tool_call"`) != 2 {
+		t.Fatal(body)
+	}
+	v.RequestID = "undeclared"
+	v.Tools = v.Tools[:1]
+	_, body = post(t, srv, c, v)
+	if !strings.Contains(body, "MODEL_PROTOCOL") || strings.Contains(body, `"type":"tool_call"`) {
+		t.Fatal("partial unsafe batch emitted", body)
+	}
+}

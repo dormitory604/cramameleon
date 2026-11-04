@@ -16,6 +16,7 @@ import (
 )
 
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,128}$`)
+var allowedTools = map[string]bool{"present_quiz": true, "read_skill": true, "update_learning_state": true, "search_context": true, "cite_sources": true}
 
 func validID(s string) bool { return idPattern.MatchString(s) }
 
@@ -51,19 +52,19 @@ type modelRequest struct {
 }
 
 func validateRequest(v modelRequest) error {
-	if v.ContractVersion != contractVersion || !validID(v.RequestID) || !validID(v.TurnID) || !validID(v.SessionID) || len(v.Messages) < 2 || len(v.Messages) > 64 || len(v.Tools) > 1 {
+	if v.ContractVersion != contractVersion || !validID(v.RequestID) || !validID(v.TurnID) || !validID(v.SessionID) || len(v.Messages) < 2 || len(v.Messages) > 64 || len(v.Tools) > len(allowedTools) {
 		return fmt.Errorf("invalid envelope")
 	}
-	allowed := false
+	declared := map[string]bool{}
 	for _, t := range v.Tools {
-		if t.Type != "function" || t.Function.Name != "present_quiz" || len(t.Function.Parameters) > 12000 {
+		if t.Type != "function" || !allowedTools[t.Function.Name] || declared[t.Function.Name] || len(t.Function.Parameters) > 12000 {
 			return fmt.Errorf("unknown tool")
 		}
 		var schema map[string]any
 		if json.Unmarshal(t.Function.Parameters, &schema) != nil || schema["type"] != "object" {
 			return fmt.Errorf("invalid schema")
 		}
-		allowed = true
+		declared[t.Function.Name] = true
 	}
 	pending := map[string]bool{}
 	seen := map[string]bool{}
@@ -85,7 +86,8 @@ func validateRequest(v modelRequest) error {
 				return fmt.Errorf("empty assistant")
 			}
 			for _, t := range m.ToolCalls {
-				if !allowed || !validID(t.ID) || seen[t.ID] || t.Type != "function" || t.Function.Name != "present_quiz" || !json.Valid([]byte(t.Function.Arguments)) {
+				// Historical calls remain valid when a tool is disabled after failure or user preference.
+				if !allowedTools[t.Function.Name] || !validID(t.ID) || seen[t.ID] || t.Type != "function" || !json.Valid([]byte(t.Function.Arguments)) {
 					return fmt.Errorf("invalid tool call")
 				}
 				pending[t.ID] = true
@@ -264,7 +266,7 @@ func (s *appServer) model(c *gin.Context) {
 	}
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 4096), 262144)
-	var call *toolCall
+	calls := map[int]*toolCall{}
 	finish := ""
 	done := false
 	totalBytes := 0
@@ -310,12 +312,14 @@ func (s *appServer) model(c *gin.Context) {
 				return
 			}
 			for _, part := range choice.Delta.ToolCalls {
-				if len(v.Tools) == 0 || part.Index != 0 {
+				if len(v.Tools) == 0 || part.Index < 0 || part.Index >= 6 {
 					protocolError("MODEL_PROTOCOL", "模型返回了不允许的工具调用")
 					return
 				}
+				call := calls[part.Index]
 				if call == nil {
 					call = &toolCall{Type: "function"}
+					calls[part.Index] = call
 				}
 				if part.ID != "" {
 					if call.ID != "" && call.ID != part.ID {
@@ -356,20 +360,41 @@ func (s *appServer) model(c *gin.Context) {
 		return
 	}
 	if finish == "tool_calls" {
-		if call == nil || !validID(call.ID) || call.Function.Name != "present_quiz" {
-			protocolError("MODEL_PROTOCOL", "工具调用不完整或不在白名单")
+		if len(calls) == 0 {
+			protocolError("MODEL_PROTOCOL", "缺少工具调用")
 			return
 		}
-		var args map[string]any
-		if json.Unmarshal([]byte(call.Function.Arguments), &args) != nil || args == nil {
-			protocolError("MODEL_PROTOCOL", "工具参数不是完整 JSON 对象")
-			return
+		validated := []map[string]any{}
+		ids := map[string]bool{}
+		for index := 0; index < len(calls); index++ {
+			call := calls[index]
+			declared := false
+			if call != nil {
+				for _, tool := range v.Tools {
+					if tool.Function.Name == call.Function.Name {
+						declared = true
+					}
+				}
+			}
+			if call == nil || !validID(call.ID) || ids[call.ID] || !declared || !allowedTools[call.Function.Name] {
+				protocolError("MODEL_PROTOCOL", "工具调用不完整或不在白名单")
+				return
+			}
+			ids[call.ID] = true
+			var args map[string]any
+			if json.Unmarshal([]byte(call.Function.Arguments), &args) != nil || args == nil {
+				protocolError("MODEL_PROTOCOL", "工具参数不是完整 JSON 对象")
+				return
+			}
+			validated = append(validated, map[string]any{"type": "tool_call", "id": call.ID, "name": call.Function.Name, "arguments": args})
 		}
-		if !send(map[string]any{"type": "tool_call", "id": call.ID, "name": call.Function.Name, "arguments": args}) {
-			status = "cancelled"
-			return
+		for _, event := range validated {
+			if !send(event) {
+				status = "cancelled"
+				return
+			}
 		}
-	} else if call != nil && finish != "length" {
+	} else if len(calls) > 0 && finish != "length" {
 		protocolError("MODEL_PROTOCOL", "工具调用缺少正确终态")
 		return
 	}

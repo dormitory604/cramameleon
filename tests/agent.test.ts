@@ -22,7 +22,7 @@ test('real Pi loop forwards system/history/tools, executes quiz then submits too
   assert.equal(payloads[1].messages.at(-1).role,'tool');
   assert.equal(payloads[1].messages.at(-1).tool_call_id,'call-1');
   assert.equal(events.filter(e=>e.type==='quiz_ready').length,1);
-  assert.deepEqual(events.at(-1),{sessionId:'chat-a',turnId:'turn-a',type:'done',status:'completed'});
+  assert.deepEqual(events.at(-1),{sessionId:'chat-a',turnId:'turn-a',type:'done',status:'waiting'});
 });
 test('HTTP error codes survive Pi mapping, no automatic upstream retry',async()=>{
   let requests=0;

@@ -8,7 +8,10 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "predev": "node scripts/build-teaching.mjs",
+    "pretest": "node scripts/build-teaching.mjs",
+    "prebuild": "node scripts/build-teaching.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.0",

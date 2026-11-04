@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AppSession, ChatMessage, LearningState, Source } from '../contracts/index.ts';
+import type { AgentAction, AppSession, ChatMessage, LearningState, Source } from '../contracts/index.ts';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildHistory } from '../agent/context.ts';
 import { loadData, saveData } from '../session/appStore.ts';
@@ -7,7 +7,7 @@ import { loadData, saveData } from '../session/appStore.ts';
 // UI consumes business events only; the Agent owns model/tool scheduling.
 type UiMessage = ChatMessage;
 type Health = { status: string; stats?: { active: number; requests: number; completed: number; cancelled: number } };
-const statusText: Record<string, string> = { running: '运行中', completed: '已完成', cancelled: '已停止', failed: '失败', limited: '达到上限', interrupted: '已中断' };
+const statusText: Record<string, string> = { running: '运行中', completed: '已完成', cancelled: '已停止', failed: '失败', limited: '达到上限', interrupted: '已中断', waiting: '等待你的选择' };
 const LEGACY_ID = 'legacy';
 
 function relativeTime(time?: number) {
@@ -120,7 +120,7 @@ export function App() {
   function updateMessage(id: string, change: (message: UiMessage) => UiMessage) {
     setMessages(previous => previous.map(message => message.id === id ? change(message) : message));
   }
-  async function run(text: string, retryMessage?: UiMessage) {
+  async function run(text: string, retryMessage?: UiMessage, action?: AgentAction) {
     if (!text.trim() || active.current || !loaded || !appSession?.modelReady) return;
     const id = crypto.randomUUID();
     const controller = new AbortController();
@@ -132,7 +132,7 @@ export function App() {
       ...(!retryMessage ? [{ id: userMessageId, role: 'user' as const, text: text.trim(), conversationId, createdAt: now }] : []),
       { id, replyTo: userMessageId, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, conversationId, createdAt: now + 1 }]);
     try {
-      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : { type: 'send', text }, history, documents: [], state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
+      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents: [], state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
         if (active.current?.id !== id || event.turnId !== id || event.sessionId !== conversationId) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         if (event.type === 'state_update') { setStates(previous => ({ ...previous, [conversationId]: event.state })); continue; }
@@ -241,6 +241,7 @@ export function App() {
         <div className="topbar-title"><strong>{currentTitle}</strong></div>
       </header>
 
+      {(states[conversationId]?.course || states[conversationId]?.progress) && <div className="learning-progress" aria-label="学习进度"><strong>{[states[conversationId]?.course, states[conversationId]?.chapter].filter(Boolean).join(' · ')}</strong><span>{states[conversationId]?.progress}</span></div>}
       <section className="chat" aria-label="聊天记录" aria-live="polite">
         <div className="chat-inner">
           {!current.length && <div className="empty">
@@ -266,9 +267,11 @@ export function App() {
                   ? <div className="quiz-feedback"><strong className={message.selectedOption === message.quiz.correctOptionId ? 'ok' : 'bad'}>{!message.selectedOption ? `正确答案：${message.quiz.correctOptionId}` : message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> {option.explanation}</p>)}</div>
                   : <small className="quiz-hint">选择一个选项后显示答案与解析。<button onClick={() => updateMessage(message.id, item => ({ ...item, revealed: true }))}>看答案</button></small>}
               </div>}
-              {!!message.sources?.length && <div className="sources">{message.sources.map(item => <button key={item.chunkId} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
+              {!!message.sources?.length && <div className="sources">{message.sources.map(item => <button key={item.documentId + ':' + item.chunkId} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
               {message.status !== 'running' && <div className="msg-actions">
                 <button onClick={() => void copy(message)} disabled={!message.text}>{copiedId === message.id ? '已复制' : '复制'}</button>
+                {index === current.length - 1 && message.quiz && message.revealed && ['completed','waiting'].includes(message.status ?? '') && <button disabled={busy} onClick={() => void run('请出下一题。', undefined, { type: 'next_question' })}>下一题</button>}
+                {index === current.length - 1 && !message.quiz && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={busy} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
                 {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={busy} onClick={() => retry(message)}>重试</button>}
               </div>}
             </article>)}
@@ -279,7 +282,7 @@ export function App() {
       <footer className="composer-wrap">
         {!appSession?.modelReady && <div role="alert" className="notice">模型尚未配置。请在服务器环境文件填写真实 API 密钥并重启服务。</div>}
         {appSession && <div className="composer-hint">北京时间今日 token：{appSession.budget.used.toLocaleString()} / {appSession.budget.limit.toLocaleString()}（含预留）</div>}
-        <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { progress: previous[conversationId]?.progress ?? '', preferences: e.target.value } }))}/></details>
+        <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {notice && <div role="alert" className="notice">{notice}</div>}
         <form className="composer" onSubmit={event => { event.preventDefault(); void run(input); }}>
           <label className="sr-only" htmlFor="message-input">输入消息</label>

@@ -189,3 +189,6 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   .composer-hint { visibility: hidden; }
   .bubble { max-width: 88%; }
 }
+
+.learning-progress { padding: 10px 24px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+.learning-progress span { color: var(--muted); }
