@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentAction, AppSession, ChatMessage, Source } from '../contracts/index.ts';
-import { Materials } from './Materials.tsx';
+import { MaterialComposer } from './Materials.tsx';
 import { SourceViewer } from './SourceViewer.tsx';
 import { Markdown } from './Markdown.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
@@ -185,7 +185,7 @@ export function App() {
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
-  }, [input]);
+  }, [input, conversationId]);
 
   async function authorize() {
     if (authBusy) return;
@@ -376,7 +376,7 @@ export function App() {
             ? <article key={message.id} className="msg user"><div className="bubble">{message.text}</div></article>
             : <article key={message.id} className="msg assistant">
               <div className="msg-head"><span className="brand-mark small">C</span>{message.status && message.status !== 'completed' && <span className={`run-status ${displayStatus(message)}`}>{statusText[displayStatus(message)!]}</span>}</div>
-              {!!message.logs?.length && <details className="tool-block" open={message.status === 'running'}>
+              {!!message.logs?.length && <details className="tool-block">
                 <summary><span className="tool-icon">⚙</span><span>工具调用</span><span className="tool-count">{message.modelRequests ?? 0} 次模型请求 · {message.toolCalls ?? 0} 次工具调用</span></summary>
                 <ol>{message.logs.map((log, logIndex) => <li key={logIndex}>{log}</li>)}</ol>
               </details>}
@@ -406,18 +406,25 @@ export function App() {
         {storageFailed && <div role="alert" className="notice">{storageStatus}<button onClick={retryStorage}>{readFailed ? '重试读取' : '重试保存'}</button></div>}
         {!appSession?.modelReady && <div role="alert" className="notice">模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。此检查不会调用模型。<button type="button" disabled={checkingReadiness || busy} onClick={() => void recheckReadiness()}>{checkingReadiness ? '正在检查模型状态…' : '重新检查模型状态'}</button></div>}
         {appSession && <div className="composer-hint">北京时间今日 token：{appSession.budget.used.toLocaleString()} / {appSession.budget.limit.toLocaleString()}（含预留）</div>}
-        <Materials key={`${appSession?.user.id}:${conversationId}`} scope={materials[conversationId] ?? {documents:[],selectedIds:[]}} disabled={busy || importing || leaving || !loaded} onBusy={setImporting} onSource={setSource} onChange={scope=>setMaterials(previous=>({...previous,[conversationId]:scope}))}/>
         <details><summary>当前对话偏好</summary><input className="search" maxLength={2000} disabled={busy || importing || leaving || !loaded} placeholder="例如：回答简短，不主动出题" value={states[conversationId]?.preferences ?? ''} onChange={e => setStates(previous => ({ ...previous, [conversationId]: { ...previous[conversationId], progress: previous[conversationId]?.progress ?? '', preferences: e.target.value, quizPolicy: undefined } }))}/>{!!states[conversationId]?.instructions?.length && <small>已记住：{states[conversationId].instructions!.join('；')}</small>}</details>
         {exitRisk && storageFailed && <div role="alert" className="notice">保存失败。仍然退出可能丢失未保存的修改；退出前会尽量保留当前用户的本机恢复副本。可重试保存，或自行选择仍然退出。<button disabled={busy || importing || leaving} onClick={() => void logout(true)}>仍然退出（可能丢失修改）</button><button disabled={leaving} onClick={() => setExitRisk(false)}>继续编辑</button></div>}
         {notice && <div role="alert" className="notice">{notice}</div>}
-        <form className="composer" onSubmit={event => { event.preventDefault(); void run(input); }}>
-          <label className="sr-only" htmlFor="message-input">输入消息</label>
-          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={loaded ? input : ''} disabled={!canRun} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
-          <div className="composer-bar">
+        <MaterialComposer
+          key={`${appSession?.user.id}:${conversationId}`}
+          scope={materials[conversationId] ?? { documents: [], selectedIds: [] }}
+          disabled={busy || importing || leaving || !loaded}
+          onBusy={setImporting}
+          onSource={setSource}
+          onChange={scope => setMaterials(previous => ({ ...previous, [conversationId]: scope }))}
+          onSubmit={() => void run(input)}
+          actions={<>
             <span className="composer-hint">Enter 发送 · Shift+Enter 换行</span>
             {busy ? <button className="stop-button" type="button" onClick={stop} aria-label="停止">■</button> : <button className="send-button" type="submit" disabled={!input.trim() || !canRun} aria-label="发送消息">↑</button>}
-          </div>
-        </form>
+          </>}
+        >
+          <label className="sr-only" htmlFor="message-input">输入消息</label>
+          <textarea ref={textarea} id="message-input" maxLength={8000} rows={1} placeholder="问点什么，或者说“考考我”…" value={loaded ? input : ''} disabled={!canRun} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void run(input); } }}/>
+        </MaterialComposer>
       </footer>
     </main>
 

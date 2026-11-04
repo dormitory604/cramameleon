@@ -178,7 +178,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* Composer */
 .composer-wrap { flex: none; max-width: 760px; width: 100%; margin: 0 auto; padding: 8px 20px 18px; }
-.composer { border: 1px solid var(--border); border-radius: 16px; background: var(--panel); box-shadow: 0 2px 12px rgb(0 0 0 / .05); padding: 10px 10px 8px 14px; transition: border-color .15s; }
+.composer { position: relative; border: 1px solid var(--border); border-radius: 16px; background: var(--panel); box-shadow: 0 2px 12px rgb(0 0 0 / .05); padding: 10px 10px 8px 14px; transition: border-color .15s; }
 .composer:focus-within { border-color: var(--faint); }
 .composer textarea { width: 100%; border: 0; outline: none; resize: none; background: transparent; line-height: 1.6; max-height: 220px; padding: 2px 0; }
 .composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
@@ -233,18 +233,25 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .learning-progress { padding: 10px 24px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
 .learning-progress span { color: var(--muted); }
 
-.materials-panel { margin: 6px 0; font-size: 13px; max-height: 32vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
-.materials-panel summary { cursor: pointer; font-weight: 600; }
-.materials-hint { color: var(--muted); font-size: 12px; margin: 6px 0; }
-.material-upload { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.material-upload input { max-width: 100%; }
+.composer-add { position: relative; flex: none; }
+.composer-add-button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: var(--hover); color: var(--text); }
+.composer-add-button:hover:not(:disabled), .composer-add-button[aria-expanded="true"] { background: var(--active); }
+.composer-add-options { position: absolute; z-index: 10; left: 0; bottom: calc(100% + 8px); width: min(280px, calc(100vw - 48px)); padding: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 6px 22px rgb(0 0 0 / .2); }
+.composer-add-options button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; }
+.composer-add-options button:hover, .composer-add-options button:focus-visible { background: var(--hover); }
+.materials-hint { color: var(--muted); font-size: 12px; margin: 4px 10px 6px; }
+.composer-dragging, .composer-dragging:focus-within { border-color: var(--accent); }
+.composer-drop-hint { position: absolute; inset: 3px; display: grid; place-items: center; border: 1px dashed var(--muted); border-radius: 12px; background: var(--hover); color: var(--text); font-weight: 600; pointer-events: none; }
+.materials-panel, .material-feedback { font-size: 13px; max-height: 28vh; overflow: auto; margin-bottom: 6px; }
+.materials-panel summary { cursor: pointer; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.material-names { margin-left: 8px; }
 .material-notice { white-space: pre-wrap; max-height: 100px; overflow: auto; margin: 6px 0; }
 .archive-list { display: grid; gap: 6px; padding: 8px 0; }
 .archive-list label { overflow-wrap: anywhere; }
 .material-list { padding: 0; list-style: none; margin: 8px 0 0; }
 .material-list li { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; border-top: 1px solid var(--border); padding: 8px 0; }
 .material-list label { overflow-wrap: anywhere; }
-.materials-panel button, .materials-panel select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: inherit; }
+.materials-panel button, .materials-panel select, .material-feedback button { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: inherit; }
 .material-warning { width: 100%; margin: 0; color: var(--muted); font-size: 12px; }
 .source-modal select { max-width: 100%; margin: 0 0 12px 8px; }
 @media (max-width: 760px) {
