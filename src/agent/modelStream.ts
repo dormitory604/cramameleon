@@ -22,14 +22,18 @@ export function wireContext(messages: Message[]) {
   }
   return { messages: [{ role: 'system', content: system.join('\n\n') }, ...history], tools: [...tools.values()] };
 }
-export function createModelStream(input: AgentInput, callbacks: { started: () => void; usage: (u: ModelUsage) => void; error: (e: AppError) => void; quizCandidate?: (event: Extract<ModelStreamEvent, { type:'quiz_candidate' }>, signal: AbortSignal) => Promise<void>; policy?: () => { disabled: string[]; instruction: string } }, fetcher: typeof fetch = fetch, userId = '') {
+export function createModelStream(input: AgentInput, callbacks: { started: () => void; retry?: () => boolean; usage: (u: ModelUsage) => void; error: (e: AppError) => void; quizCandidate?: (event: Extract<ModelStreamEvent, { type:'quiz_candidate' }>, signal: AbortSignal) => Promise<void>; policy?: () => { disabled: string[]; instruction: string } }, fetcher: typeof fetch = fetch, userId = '') {
   return (model: Model<any>, context: TranscriptContext, options?: SimpleStreamOptions) => {
     const stream = createAssistantMessageEventStream();
-    const message: AssistantMessage = { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id, stopReason: 'pending', timestamp: Date.now(), usage: emptyUsage() };
     void (async () => {
+     const signal = options?.signal ? AbortSignal.any([input.signal, options.signal]) : input.signal;
+     let streamStarted = false;
+     for (let attempt = 0; ; attempt++) {
+      const message: AssistantMessage = { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id, stopReason: 'pending', timestamp: Date.now(), usage: emptyUsage() };
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       let finish: 'stop' | 'toolUse' | 'length' | undefined;
       let started = false;
+      let toolOutput = false;
       const requestId = crypto.randomUUID();
       try {
         input.signal.throwIfAborted(); options?.signal?.throwIfAborted(); callbacks.started();
@@ -39,7 +43,7 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
           wire.tools = wire.tools.filter(t => !policy.disabled.includes(t.function.name));
           (wire.messages[0] as { content: string }).content += '\n本轮执行约束：' + policy.instruction;
         }
-        const response = await fetcher('/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Cram-User': userId }, credentials: 'same-origin', signal: options?.signal ?? input.signal,
+        const response = await fetcher('/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Cram-User': userId }, credentials: 'same-origin', signal,
           body: JSON.stringify({ contractVersion: CONTRACT_VERSION, requestId, turnId: input.turnId, sessionId: input.sessionId, ...wire }) });
         if (!response.ok) {
           const value = await response.json().catch(() => null);
@@ -49,7 +53,7 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
         reader = response.body.getReader();
         const decoder = new TextDecoder();
         let pending = '';
-        stream.push({ type: 'start', partial: message });
+        if (!streamStarted) { stream.push({ type: 'start', partial: message }); streamStarted = true; }
         const consume = async (line: string) => {
           if (!line.startsWith('data:')) return;
           if (finish) throw new AppError('MODEL_PROTOCOL', '模型终止后仍有数据');
@@ -65,8 +69,10 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
             const b = message.content[index]; if (b.type === 'text') b.text += event.delta;
             stream.push({ type: 'text_delta', delta: event.delta, contentIndex: index, partial: message });
           } else if (event.type === 'quiz_candidate') {
+            toolOutput = true;
             if (!policy?.disabled.includes('present_quiz')) await callbacks.quizCandidate?.(event, options?.signal ?? input.signal);
           } else if (event.type === 'tool_call') {
+            toolOutput = true;
             const toolCall = { type: 'toolCall' as const, id: event.id, name: event.name, arguments: event.arguments as JsonObject };
             message.content.push(toolCall);
             stream.push({ type: 'toolcall_end', contentIndex: message.content.length - 1, toolCall, partial: message });
@@ -93,13 +99,34 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
         if (finish === 'length') throw new AppError('MODEL_OUTPUT_LIMIT', '回答达到输出上限，已保留收到的内容。可缩小问题后重试。');
         message.stopReason = finish;
         stream.push({ type: 'done', reason: finish, message });
+        break;
       } catch (error) {
-        const aborted = options?.signal?.aborted || input.signal.aborted;
+        let aborted = signal.aborted;
         const appError = error instanceof AppError ? error : new AppError('NETWORK_ERROR', error instanceof Error ? error.message : '模型连接失败');
+        // Retry only this model step. Never replay streamed quizzes or tool calls.
+        if (!aborted && !toolOutput && attempt < 2 && ['NETWORK_ERROR', 'MODEL_STREAM_INTERRUPTED', 'MODEL_UNAVAILABLE', 'MODEL_TIMEOUT', 'MODEL_RATE_LIMIT'].includes(appError.code)) {
+          await reader?.cancel().catch(() => undefined); reader?.releaseLock(); reader = undefined;
+          if (callbacks.retry?.()) {
+            // Finish the discarded text block in stream order, after its queued deltas.
+            // Keep one Pi assistant message across attempts so history is not duplicated.
+            stream.push({ type: 'text_end', contentIndex: 0, content: '', partial: { ...message, content: [] } });
+            await new Promise<void>(resolve => {
+              const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
+              const timer = setTimeout(done, 1000 * (attempt + 1));
+              signal.addEventListener('abort', done, { once: true });
+              if (signal.aborted) done();
+            });
+            if (!signal.aborted) continue;
+            aborted = true;
+          }
+        }
         if (!aborted) callbacks.error(appError);
         message.stopReason = aborted ? 'aborted' : 'error'; message.errorMessage = appError.message;
         stream.push({ type: 'error', reason: message.stopReason, error: message });
-      } finally { await reader?.cancel().catch(() => undefined); reader?.releaseLock(); stream.end(); }
+        break;
+      } finally { await reader?.cancel().catch(() => undefined); reader?.releaseLock(); }
+     }
+     stream.end();
     })();
     return stream;
   };

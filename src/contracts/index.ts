@@ -1,7 +1,7 @@
 export const CONTRACT_VERSION = 'app.v1' as const;
 export type Source = { documentId: string; chunkId: string; title: string; text: string; location: string; page?: number; slide?: number; url?: string };
 export type Quiz = { id: string; question: string; options: { id: string; text: string; explanation: string }[]; correctOptionId: string; origin: 'generated' | 'adapted' | 'past_paper'; sources: Source[] };
-export const MAX_QUIZZES_PER_BATCH = 6;
+export const MAX_QUIZZES_PER_BATCH = 10;
 export type QuizBoard = { quiz: Quiz; selectedOption?: string; revealed?: boolean };
 export type RunStatus = 'running' | 'completed' | 'cancelled' | 'failed' | 'limited' | 'interrupted' | 'waiting';
 export type SkillName = 'concept' | 'review' | 'exam';
@@ -9,7 +9,7 @@ export const TOOL_NAMES = ['present_quiz', 'read_skill', 'update_learning_state'
 export type ToolName = typeof TOOL_NAMES[number];
 export const isToolName = (name: unknown): name is ToolName => typeof name === 'string' && (TOOL_NAMES as readonly string[]).includes(name);
 export type LearningState = { preferences: string; progress: string; course?: string; chapter?: string; phase?: 'scope' | 'learning' | 'practice'; skill?: SkillName; skillVersions?: Partial<Record<SkillName, string>>; instructions?: string[]; quizPolicy?: 'allow' | 'avoid' };
-export type ChatMessage = { id: string; conversationId: string; createdAt: number; role: 'user' | 'assistant'; text: string; status?: RunStatus; logs?: string[]; modelRequests?: number; toolCalls?: number; quizzes?: QuizBoard[]; quiz?: Quiz; selectedOption?: string; revealed?: boolean; sources?: Source[]; error?: string; errorCode?: string; replyTo?: string; editedAt?: number; editArchive?: true;
+export type ChatMessage = { id: string; conversationId: string; createdAt: number; role: 'user' | 'assistant'; text: string; status?: RunStatus; logs?: string[]; modelRequests?: number; toolCalls?: number; quizzes?: QuizBoard[]; activeQuizIndex?: number; quiz?: Quiz; selectedOption?: string; revealed?: boolean; sources?: Source[]; error?: string; errorCode?: string; replyTo?: string; editedAt?: number; editArchive?: true;
   // Material ids selected when this turn was submitted; undefined on older records.
   selectedMaterialIds?: string[];
   // Editing resumes from the state before this prompt, rather than a later turn.
@@ -32,6 +32,7 @@ export type ModelUsage = { input: number; output: number; total: number };
 type Envelope = { sessionId: string; turnId: string };
 export type AgentEvent = Envelope & (
   | { type: 'text_delta'; delta: string }
+  | { type: 'text_reset'; text: string }
   | { type: 'tool_status'; category: 'model' | 'tool'; status: 'started' | 'completed'; message: string }
   | { type: 'quiz_ready'; quiz: Quiz }
   | { type: 'sources_ready'; sources: Source[] }

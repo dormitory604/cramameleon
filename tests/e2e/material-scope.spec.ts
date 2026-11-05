@@ -192,11 +192,11 @@ test('retry uses the current material scope and retains the retried turn after r
   }
   return {type:'text_delta',delta:'QUOTED_PROSE_RETRY_6：讲义说明 P(B)>0。'};
  });
- let failed=false;
+ let failed=0;
  await page.route('**/api/model',async route=>{
   const body=route.request().postDataJSON();
-  if(body.messages.at(-1).content==='再解释一次'&&!failed){
-   failed=true;requests.push(body);
+  if(body.messages.at(-1).content==='再解释一次'&&failed<3){
+   failed++;requests.push(body);
    return route.fulfill({status:502,json:{error:{code:'MODEL_UNAVAILABLE',message:'暂时无法连接模型'}}});
   }
   await route.fallback();

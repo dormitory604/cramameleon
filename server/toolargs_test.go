@@ -71,3 +71,21 @@ func TestParseToolArgumentsPreservesNonMathJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestQuizBatchStreamsTenCompleteQuestions(t *testing.T) {
+	questions := make([]map[string]any, 11)
+	for i := range questions {
+		questions[i] = map[string]any{"question": i + 1}
+	}
+	raw, err := json.Marshal(map[string]any{"quizzes": questions[:10]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(quizBatchPrefix(string(raw))); got != 10 {
+		t.Fatalf("streamed %d questions, want 10", got)
+	}
+	raw, _ = json.Marshal(map[string]any{"quizzes": questions})
+	if got := len(quizBatchPrefix(string(raw))); got != 10 {
+		t.Fatalf("streamed %d questions beyond batch maximum", got)
+	}
+}

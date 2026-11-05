@@ -13,7 +13,7 @@ test('multi-session history, retry, local quiz feedback, persistence and delete'
   if(path==='/api/model'){
    const body=route.request().postDataJSON();requests.push(body);
    const last=body.messages.at(-1);
-   if(last.content==='失败请求'&&requests.filter(v=>v.messages.at(-1).content==='失败请求').length===1)return route.fulfill({status:502,json:{error:{code:'MODEL_UNAVAILABLE',message:'测试故障'}}});
+   if(last.content==='失败请求'&&requests.filter(v=>v.messages.at(-1).content==='失败请求').length<=3)return route.fulfill({status:502,json:{error:{code:'MODEL_UNAVAILABLE',message:'测试故障'}}});
    const quiz=last.content==='出题';
    if(last.role==='tool'&&last.tool_call_id==='q-1')await quizFollowUp;
    const events=[{type:'start',requestId:body.requestId},...(quiz?[{type:'tool_call',id:'q-1',name:'present_quiz',arguments:{question:'1+1 等于多少？',options:[{id:'A',text:'2',explanation:'相加得到2'},{id:'B',text:'3',explanation:'3不正确'}],correctOptionId:'A'}}]:[{type:'text_delta',delta:'回答：'+(last.role==='tool'?'请选择选项':last.content)}]),{type:'usage',usage:{input:10,output:2,total:12}},{type:'finish',stopReason:quiz?'toolUse':'stop'}];

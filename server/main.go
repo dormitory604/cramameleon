@@ -96,12 +96,12 @@ func loadConfig() (config, error) {
 		return c, e
 	}
 	c.dailyBudget = int64(n)
-	c.maxOutput, e = envInt("APP_MAX_OUTPUT_TOKENS", 2048)
+	c.maxOutput, e = envInt("APP_MAX_OUTPUT_TOKENS", 393216)
 	if e != nil {
 		return c, e
 	}
-	if c.maxOutput > 8192 {
-		return c, fmt.Errorf("output limit exceeds 8192")
+	if c.maxOutput > 393216 {
+		return c, fmt.Errorf("output limit exceeds model maximum 393216")
 	}
 	c.maxInput, e = envInt("APP_MAX_INPUT_BYTES", 64000)
 	if e != nil {

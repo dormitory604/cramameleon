@@ -40,7 +40,7 @@ export function quizTool(onQuiz: (quiz: Quiz) => void, context = new ContextSour
     },additionalProperties:false},
     execute:async(id,params,signal)=>{
       const questions = params.quizzes === undefined ? [params] : params.quizzes;
-      if (!Array.isArray(questions) || !questions.length || questions.length > MAX_QUIZZES_PER_BATCH) throw new Error('请提交 1–6 道单选题。');
+      if (!Array.isArray(questions) || !questions.length || questions.length > MAX_QUIZZES_PER_BATCH) throw new Error('请提交 1–10 道单选题。');
       if (staged.size > questions.length) throw new Error('题目流与最终载荷不一致。');
       const errors: string[] = [];
       for (const [index, question] of questions.entries()) {

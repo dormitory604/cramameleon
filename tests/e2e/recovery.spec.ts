@@ -152,7 +152,9 @@ for (const [code, message] of [
   test(`${code} explains the cause and available recovery action`, async ({ page }) => {
     await ready(page);
     await send(page, '触发错误');
-    await emit(page, 0, [{ type: 'error', code, message: 'opaque upstream detail' }], true);
+    for (let i = 0; i < (['NETWORK_ERROR', 'MODEL_STREAM_INTERRUPTED'].includes(code) ? 3 : 1); i++) {
+      await emit(page, i, [{ type: 'error', code, message: 'opaque upstream detail' }], true);
+    }
     await expect(page.getByText(message, { exact: true })).toBeVisible();
     if (code === 'MODEL_NOT_CONFIGURED') {
       await expect(page.getByLabel('输入消息')).toBeDisabled();
@@ -299,7 +301,10 @@ test('native stream error after visible output shows interruption guidance (#14)
   await send(page, '传输中断前的问题');
   await emit(page, 0, [{ type: 'text_delta', delta: '连接重置前已显示的部分结果' }]);
   await expect(page.getByText('连接重置前已显示的部分结果', { exact: true })).toBeVisible();
-  await page.evaluate(() => (window as any).modelCalls[0].stream.error(new TypeError('simulated connection reset')));
+  for (let i = 0; i < 3; i++) {
+    if (i > 0) await emit(page, i, [{ type: 'text_delta', delta: '连接重置前已显示的部分结果' }]);
+    await page.evaluate(i => (window as any).modelCalls[i].stream.error(new TypeError('simulated connection reset')), i);
+  }
   await expect(page.getByText('失败', { exact: true })).toBeVisible();
   await expect(page.getByText('连接重置前已显示的部分结果', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
@@ -401,4 +406,19 @@ test('stop preserves partial output and releases the UI before the old stream se
   await page.reload();
   await expect(page.getByText('已停止', { exact: true })).toBeVisible();
   await expect(page.getByText('已收到的部分', { exact: true })).toBeVisible();
+});
+
+
+test('automatic retry replaces partial text without duplicating the question', async ({ page }) => {
+ await ready(page);
+ await send(page, '自动恢复这个回答');
+ await emit(page, 0, [{ type: 'text_delta', delta: '被截断的旧内容' }]);
+ await expect(page.getByText('被截断的旧内容', { exact: true })).toBeVisible();
+ await page.evaluate(() => (window as any).modelCalls[0].stream.error(new TypeError('reset')));
+ await emit(page, 1, [{ type: 'text_delta', delta: '自动恢复后的完整内容' }, { type: 'finish', stopReason: 'stop' }], true);
+ await expect(page.getByText('自动恢复后的完整内容', { exact: true })).toBeVisible();
+ await expect(page.getByText('被截断的旧内容', { exact: true })).toHaveCount(0);
+ await expect(page.locator('.msg.user')).toHaveCount(1);
+ await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+ expect(await page.evaluate(() => (window as any).modelCalls.length)).toBe(2);
 });

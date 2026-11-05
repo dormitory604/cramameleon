@@ -303,6 +303,7 @@ export function App() {
         updateMessage(id, message => {
           switch (event.type) {
             case 'text_delta': return { ...message, text: message.text + event.delta };
+            case 'text_reset': return { ...message, text: event.text };
             case 'tool_status': return { ...message, logs: [...message.logs ?? [], event.message], modelRequests: (message.modelRequests ?? 0) + Number(event.category === 'model' && event.status === 'started'), toolCalls: (message.toolCalls ?? 0) + Number(event.category === 'tool' && event.status === 'started') };
             case 'quiz_ready': return { ...message, quizzes: [...quizBoards(message), { quiz: event.quiz }] };
             case 'sources_ready': return { ...message, sources: event.sources };
@@ -325,6 +326,14 @@ export function App() {
   function revealQuiz(messageId: string, quizId: string, selectedOption?: string) {
     updateMessage(messageId, message => ({ ...message, quizzes: quizBoards(message).map(board =>
       board.quiz.id === quizId && !board.revealed ? { ...board, selectedOption, revealed: true } : board) }));
+  }
+  function moveQuiz(messageId: string, offset: number) {
+    updateMessage(messageId, message => {
+      const boards = quizBoards(message);
+      const index = Math.min(boards.length - 1, Math.max(0, message.activeQuizIndex ?? 0));
+      if (offset > 0 && !boards[index]?.revealed) return message;
+      return { ...message, activeQuizIndex: Math.max(0, Math.min(boards.length - 1, index + offset)) };
+    });
   }
   function nextQuestion() {
     if (nextQuestionAvailable) void run('请出下一题。', undefined, { type: 'next_question' });
@@ -410,6 +419,7 @@ export function App() {
           </div>}
           {current.map((message, index) => {
             const boards = quizBoards(message);
+            const activeQuizIndex = Math.min(boards.length - 1, Math.max(0, message.activeQuizIndex ?? 0));
             const sources = [...new Map([...(message.sources ?? []), ...boards.flatMap(({ quiz }) => quiz.sources)].map(item => [JSON.stringify([item.documentId, item.chunkId]), item])).values()];
             return message.role === 'user'
             ? <article key={message.id} className="msg user"><div className={`user-message${editing?.id === message.id ? ' editing' : ''}`}>
@@ -426,13 +436,17 @@ export function App() {
               </details>}
               {message.text ? <Markdown className="msg-text" text={message.role === 'assistant' ? stripQuizRecords(message.text) : message.text} streaming={message.status === 'running'}/> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
               {message.error && <div role="alert" className="error-card">{message.error}</div>}
-              {boards.map(({ quiz, selectedOption, revealed }, quizIndex) => <div key={quiz.id} className="quiz">
-                <div className="quiz-top"><span>第 {quizIndex + 1}/{boards.length} 道题</span><span>{quiz.origin === 'generated' ? '自编' : quiz.origin === 'adapted' ? '改编' : '真题'} · 单选题</span></div>
+              {boards.slice(activeQuizIndex, activeQuizIndex + 1).map(({ quiz, selectedOption, revealed }) => <div key={quiz.id} className="quiz">
+                <div className="quiz-top"><span>第 {activeQuizIndex + 1}/{boards.length} 道题</span><span>{quiz.origin === 'generated' ? '自编' : quiz.origin === 'adapted' ? '改编' : '真题'} · 单选题</span></div>
                 <h3><Markdown inline text={quiz.question}/></h3>
                 <div className="quiz-options">{quiz.options.map(option => <button key={option.id} disabled={!!revealed || leaving} className={`quiz-option ${revealed ? option.id === quiz.correctOptionId ? 'correct' : option.id === selectedOption ? 'incorrect' : '' : ''}`} onClick={() => revealQuiz(message.id, quiz.id, option.id)}><span className="option-key">{option.id}</span><Markdown inline text={option.text}/>{revealed && option.id === quiz.correctOptionId && <b>✓</b>}</button>)}</div>
                 {revealed
                   ? <div className="quiz-feedback"><strong className={!selectedOption ? undefined : selectedOption === quiz.correctOptionId ? 'ok' : 'bad'}>{!selectedOption ? `正确答案：${quiz.correctOptionId}` : selectedOption === quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${quiz.correctOptionId}`}</strong>{quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> <Markdown inline text={option.explanation}/></p>)}</div>
                   : <small className="quiz-hint">选择一个选项后显示答案与解析。<button disabled={leaving} onClick={() => revealQuiz(message.id, quiz.id)}>看答案</button></small>}
+                <div className="msg-actions">
+                  {activeQuizIndex > 0 && <button disabled={leaving} onClick={() => moveQuiz(message.id, -1)}>上一道</button>}
+                  {revealed && activeQuizIndex < boards.length - 1 && <button disabled={leaving} onClick={() => moveQuiz(message.id, 1)}>下一道</button>}
+                </div>
               </div>)}
               {!!sources.length && <div className="sources">{sources.map(item => <button key={JSON.stringify([item.documentId, item.chunkId])} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
               {message.status !== 'running' && <div className="msg-actions">

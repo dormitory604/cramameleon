@@ -87,6 +87,9 @@ func TestDailyTokenBudgetConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if cfg.maxOutput != 393216 {
+				t.Errorf("output maximum = %d, want model maximum 393216", cfg.maxOutput)
+			}
 			if cfg.dailyBudget != tt.want {
 				t.Errorf("daily budget = %d, want %d", cfg.dailyBudget, tt.want)
 			}

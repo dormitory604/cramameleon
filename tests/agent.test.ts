@@ -47,8 +47,9 @@ test('native reader error after partial text is a stream interruption, not a net
     }}));
   }) as typeof fetch;
   const events=await Array.fromAsync(new PiAgentAdapter(config,fetcher).run(input()));
-  assert.equal(requests,1);
-  assert.deepEqual(events.filter(e=>e.type==='text_delta').map(e=>(e as any).delta),['连接重置前已生成的文字']);
+  assert.equal(requests,3);
+  assert.equal(events.filter(e=>e.type==='text_reset').length,2);
+  assert.deepEqual(events.filter(e=>e.type==='text_delta').map(e=>(e as any).delta),Array(3).fill('连接重置前已生成的文字'));
   const errors=events.filter(e=>e.type==='error');
   assert.equal(errors.length,1);assert.equal((errors[0] as any).code,'MODEL_STREAM_INTERRUPTED');
   assert.deepEqual(events.at(-1),{sessionId:'chat-a',turnId:'turn-a',type:'done',status:'failed'});
@@ -57,7 +58,7 @@ test('fetch rejection before any response stays NETWORK_ERROR (#14)',async()=>{
   let requests=0;
   const fetcher=(async()=>{requests++;throw new TypeError('Failed to fetch');}) as typeof fetch;
   const events=await Array.fromAsync(new PiAgentAdapter(config,fetcher).run(input()));
-  assert.equal(requests,1);
+  assert.equal(requests,3);
   assert.deepEqual(events.filter(e=>e.type==='error').map(e=>(e as any).code),['NETWORK_ERROR']);
   assert.equal((events.at(-1) as any).status,'failed');
 });
@@ -170,4 +171,69 @@ test('a batch with a rejected question repairs just that question', async () => 
   assert.equal(requests, 2);
   assert.deepEqual(events.filter(event => event.type === 'quiz_ready').map(event => event.quiz.question), questions.map(question => question.question));
   assert.deepEqual(events.at(-1), { sessionId: 'chat-a', turnId: 'turn-a', type: 'done', status: 'waiting' });
+});
+
+test('automatic recovery replaces only the interrupted model step and never replays tools', async () => {
+  const payloads: any[] = [];
+  const fetcher = (async (_url, init) => {
+    const body = JSON.parse(init!.body as string); payloads.push(body);
+    const n = payloads.length;
+    const step = n === 1 ? { type: 'tool_call', id: 'skill', name: 'read_skill', arguments: { name: 'exam' } }
+      : { type: 'text_delta', delta: n === 2 ? '不完整内容' : '恢复后的完整回答' };
+    const events = [{ type: 'start', requestId: body.requestId }, step,
+      ...(n === 2 ? [] : [{ type: 'finish', stopReason: n === 1 ? 'toolUse' : 'stop' }])];
+    return new Response(events.map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''));
+  }) as typeof fetch;
+  const events = await Array.fromAsync(new PiAgentAdapter(config, fetcher).run(input()));
+  assert.equal(payloads.length, 3);
+  assert.notEqual(payloads[1].requestId, payloads[2].requestId);
+  assert.deepEqual(payloads[1].messages, payloads[2].messages);
+  assert.equal(events.filter(e => e.type === 'tool_status' && e.category === 'tool' && e.status === 'started').length, 1);
+  let displayed = '';
+  for (const event of events) {
+    if (event.type === 'text_delta') displayed += event.delta;
+    if (event.type === 'text_reset') displayed = event.text;
+  }
+  assert.equal(displayed, '恢复后的完整回答');
+  assert.equal(events.filter(e => e.type === 'error').length, 0);
+  assert.equal((events.at(-1) as any).status, 'completed');
+});
+
+test('cancellation during automatic retry backoff sends no further request', async () => {
+  const controller = new AbortController(); let requests = 0;
+  const fetcher = (async () => { requests++; throw new TypeError('Failed to fetch'); }) as typeof fetch;
+  const events = [];
+  for await (const event of new PiAgentAdapter(config, fetcher).run({ ...input(), signal: controller.signal })) {
+    events.push(event);
+    if (event.type === 'tool_status' && event.message.includes('自动重试')) controller.abort();
+  }
+  assert.equal(requests, 1);
+  assert.equal((events.at(-1) as any).status, 'cancelled');
+  assert.equal(events.filter(e => e.type === 'error').length, 0);
+});
+
+test('an interruption after a streamed quiz preserves it without automatically repeating it', async () => {
+  let requests = 0;
+  const fetcher = (async (_url, init) => {
+    requests++; const body = JSON.parse(init!.body as string);
+    return new Response([{ type: 'start', requestId: body.requestId }, { type: 'quiz_candidate', id: 'batch', index: 0, arguments: quiz }]
+      .map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''));
+  }) as typeof fetch;
+  const events = await Array.fromAsync(new PiAgentAdapter(config, fetcher).run(input()));
+  assert.equal(requests, 1);
+  assert.equal(events.filter(e => e.type === 'quiz_ready').length, 1);
+  assert.ok(events.some(e => e.type === 'error' && e.code === 'MODEL_STREAM_INTERRUPTED'));
+});
+
+test('ten questions are accepted in a single batch', async () => {
+  const questions = Array.from({ length: 10 }, (_, i) => ({ ...quiz, question: '第' + (i + 1) + '题' }));
+  const fetcher = (async (_url, init) => {
+    const { requestId } = JSON.parse(init!.body as string);
+    return new Response([{ type: 'start', requestId }, ...questions.map((arguments_, index) => ({ type: 'quiz_candidate', id: 'batch', index, arguments: arguments_ })),
+      { type: 'tool_call', id: 'batch', name: 'present_quiz', arguments: { quizzes: questions } }, { type: 'finish', stopReason: 'toolUse' }]
+      .map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''));
+  }) as typeof fetch;
+  const events = await Array.fromAsync(new PiAgentAdapter(config, fetcher).run(input()));
+  assert.equal(events.filter(e => e.type === 'quiz_ready').length, 10);
+  assert.equal((events.at(-1) as any).status, 'waiting');
 });

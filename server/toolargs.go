@@ -180,7 +180,7 @@ func parseToolArguments(raw string) (map[string]any, bool) {
 // Stream only complete items from the first field of {"quizzes":[...]}.
 // The outer object may still be incomplete. Final tool arguments are checked
 // separately, using the same LaTeX repair.
-const maxQuizBatch = 6
+const maxQuizBatch = 10
 
 func quizBatchPrefix(raw string) []map[string]any {
 	decoder := json.NewDecoder(strings.NewReader(repairLatexEscapes(raw)))

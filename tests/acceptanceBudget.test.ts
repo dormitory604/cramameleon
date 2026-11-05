@@ -69,15 +69,15 @@ test('insufficient budget: stops before sending the request whose reservation no
 
 test('unknown usage: interrupted stream and 5xx keep the conservative reservation and are flagged; 4xx is a trusted zero', async () => {
   const p = await paths();
-  const up = upstream([{ cut: true }, { status: 502 }, { status: 429 }]);
+  const up = upstream([{ cut: true }, { cut: true }, { cut: true }, { status: 502 }, { status: 429 }]);
   const report = await runAcceptance({ ...p, phase: 'spec-4', limit: 100000, fetcher: up.fetcher, cases: [ask('a'), ask('b'), ask('c')] });
-  assert.deepEqual(report.requests.map(r => r.status), ['unknown_usage', 'unknown_usage', 'rejected']);
-  const [cut, bad, rejected] = report.requests;
+  assert.deepEqual(report.requests.map(r => r.status), ['unknown_usage', 'unknown_usage', 'unknown_usage', 'unknown_usage', 'rejected']);
+  const [cut, cutRetry1, cutRetry2, bad, rejected] = report.requests;
   assert.equal(cut.charged, cut.reserved); assert.match(cut.note!, /未收到可信用量/);
   assert.equal(bad.charged, bad.reserved); assert.match(bad.note!, /502/);
   assert.equal(rejected.charged, 0);
-  assert.equal(report.totals.conservativelyHeld, cut.reserved + bad.reserved);
-  assert.equal(report.totals.used, cut.reserved + bad.reserved);
+  assert.equal(report.totals.conservativelyHeld, cut.reserved + cutRetry1.reserved + cutRetry2.reserved + bad.reserved);
+  assert.equal(report.totals.used, cut.reserved + cutRetry1.reserved + cutRetry2.reserved + bad.reserved);
   assert.deepEqual(report.cases.map(c => c.outcome), ['failed', 'failed', 'failed']);
   assert.equal(report.stopReason, 'completed');
 });
