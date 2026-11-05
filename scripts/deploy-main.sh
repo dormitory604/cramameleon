@@ -96,6 +96,7 @@ git archive "$target" | tar -xf - -C "$stage/source"
   npm run build
 )
 mv "$stage/source/dist" "$stage/release/dist"
+mv "$stage/source/material-parser" "$stage/release/material-parser"
 if git diff --quiet "$current" "$target" -- server; then
   cp -p "var/$previous/cramameleon" "$stage/release/cramameleon"
 else

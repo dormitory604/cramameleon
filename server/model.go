@@ -16,7 +16,7 @@ import (
 )
 
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,128}$`)
-var allowedTools = map[string]bool{"present_quiz": true, "read_skill": true, "update_learning_state": true, "search_context": true, "read_context": true, "cite_sources": true}
+var allowedTools = map[string]bool{"present_quiz": true, "read_skill": true, "update_learning_state": true, "search_context": true, "read_context": true, "cite_sources": true, "search_old_site": true, "read_old_site": true}
 
 func validID(s string) bool { return idPattern.MatchString(s) }
 
@@ -149,6 +149,7 @@ func (s *appServer) model(c *gin.Context) {
 		fail(c, 400, "INVALID_REQUEST", "模型请求不符合 app.v1 契约")
 		return
 	}
+	s.injectRemoteEvidence(c.GetString("sessionHash"), &v)
 	payload := map[string]any{"model": s.cfg.model, "messages": v.Messages, "stream": true, "stream_options": map[string]bool{"include_usage": true}, "max_tokens": s.cfg.maxOutput, "thinking": map[string]string{"type": "disabled"}}
 	if len(v.Tools) > 0 {
 		payload["tools"] = v.Tools

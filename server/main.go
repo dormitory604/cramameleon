@@ -40,6 +40,8 @@ type appServer struct {
 	client        *http.Client
 	endpoint      string
 	slots         chan struct{}
+	parseSlots    chan struct{}
+	remoteCache   remoteCache
 	users         sync.Map
 	loginMu       sync.Mutex
 	loginFailures int
@@ -160,7 +162,7 @@ func contentSecurityPolicy(oldSite string) string {
 }
 
 func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
-	s := &appServer{cfg: cfg, store: db, client: &http.Client{Timeout: cfg.timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: "https://api.deepseek.com/chat/completions", slots: make(chan struct{}, 2)}
+	s := &appServer{cfg: cfg, store: db, client: &http.Client{Timeout: cfg.timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: "https://api.deepseek.com/chat/completions", slots: make(chan struct{}, 2), parseSlots: make(chan struct{}, 2)}
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	// Only a reverse proxy on the application host may supply the client address.
@@ -274,6 +276,7 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	})
 	api.POST("/model", s.model)
 	api.GET("/old-site/*path", s.materials)
+	api.POST("/old-site-verify", s.verifyRemoteQuestion)
 	api.POST("/old-site/*path", s.materials)
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {

@@ -7,6 +7,9 @@ export class ContextSources {
  private read = new Map<string, Source>();
  private remaining = 8000;
  constructor(documents: Document[]) { this.docs = documents.slice(0,20); }
+ rememberRemote(source: Source) {
+  if (validSource(source) && source.text === '' && source.url) this.remember(source);
+ }
  get budgetExhausted() { return this.remaining <= 0; }
  private remember(source: Source) {
   const previous=this.read.get(key(source));

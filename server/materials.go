@@ -15,7 +15,7 @@ import (
 
 const remoteFileLimit int64 = 20 << 20
 
-var materialRoute = regexp.MustCompile(`^/(quota|materials|packages|materials/[1-9][0-9]*|packages/[1-9][0-9]*|packages/[1-9][0-9]*/items|materials/[1-9][0-9]*/access|packages/[1-9][0-9]*/access|materials/[1-9][0-9]*/content|packages/[1-9][0-9]*/items/[1-9][0-9]*/content)$`)
+var materialRoute = regexp.MustCompile(`^/(quota|materials|packages|materials/[1-9][0-9]*|packages/[1-9][0-9]*|packages/[1-9][0-9]*/items|materials/[1-9][0-9]*/access|packages/[1-9][0-9]*/access|materials/[1-9][0-9]*/(parsed|evidence)|packages/[1-9][0-9]*/items/[1-9][0-9]*/(parsed|evidence))$`)
 
 // The browser supplies resource IDs; the server alone selects the upstream
 // origin, attaches the encrypted session credential, and rejects redirects.
@@ -33,6 +33,15 @@ func (s *appServer) materials(c *gin.Context) {
 	if !materialRoute.MatchString(path) || (access && c.Request.Method != http.MethodPost) || (!access && c.Request.Method != http.MethodGet) {
 		fail(c, 404, "NOT_FOUND", "资料接口不存在")
 		return
+	}
+	parseRequest := strings.HasSuffix(path, "/parsed") || strings.HasSuffix(path, "/evidence")
+	var view remoteView
+	if parseRequest {
+		var ok bool
+		path, view, ok = parseRemoteView(c, path)
+		if !ok {
+			return
+		}
 	}
 	var encrypted []byte
 	var expires int64
@@ -52,14 +61,34 @@ func (s *appServer) materials(c *gin.Context) {
 	query := url.Values{}
 	for key, values := range c.Request.URL.Query() {
 		switch key {
-		case "search", "course_name", "page", "page_size", "readId":
+		case "search", "course_name", "page", "page_size", "readId", "category":
 			if len(values) != 1 || len(values[0]) > 500 {
 				fail(c, 400, "INVALID_REQUEST", "资料查询参数不正确")
 				return
 			}
 			query.Set(key, values[0])
+		case "turnId", "callId", "startChunk", "query":
+			if parseRequest && len(values) == 1 {
+				continue
+			}
+			fallthrough
 		default:
 			fail(c, 400, "INVALID_REQUEST", "资料查询参数不正确")
+			return
+		}
+	}
+	if parseRequest {
+		view.path = path
+		view.session = c.GetString("sessionHash")
+		if cached := s.remoteCache.get("document:" + view.session + ":" + path); cached != nil {
+			s.sendRemoteView(c, view, cached)
+			return
+		}
+		select {
+		case s.parseSlots <- struct{}{}:
+			defer func() { <-s.parseSlots }()
+		default:
+			fail(c, 429, "MATERIALS_BUSY", "资料解析繁忙，请稍后重试")
 			return
 		}
 	}
@@ -84,7 +113,7 @@ func (s *appServer) materials(c *gin.Context) {
 	client.Timeout = 45 * time.Second
 	response, e := client.Do(req)
 	if e != nil {
-		fail(c, 502, "OLD_SITE_UNAVAILABLE", "资料服务暂不可用；读取请求可使用同一编号重试")
+		fail(c, 502, "OLD_SITE_UNAVAILABLE", "资料服务暂不可用，请稍后重试")
 		return
 	}
 	defer response.Body.Close()
@@ -111,11 +140,7 @@ func (s *appServer) materials(c *gin.Context) {
 			fail(c, 422, "FILE_UNAVAILABLE", "文件大小无法确认或超过 20 MB")
 			return
 		}
-		c.Header("Content-Type", response.Header.Get("Content-Type"))
-		c.Header("Content-Disposition", response.Header.Get("Content-Disposition"))
-		c.Header("Content-Length", response.Header.Get("Content-Length"))
-		c.Status(200)
-		_, _ = io.Copy(c.Writer, io.LimitReader(response.Body, remoteFileLimit))
+		s.parseRemoteMaterial(c, response, view)
 		return
 	}
 	data, e := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))

@@ -65,7 +65,7 @@ func TestMaterialAdapterCredentialBindingAndNoRedirects(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("identity failure reached upstream")
 	}
-	for _, path := range []string{"/materials?url=https://evil.example", "/materials?token=secret", "/materials/1/preview", "/packages/1/items/1/access"} {
+	for _, path := range []string{"/materials?url=https://evil.example", "/materials?token=secret", "/materials/1/preview", "/materials/1/content", "/packages/1/items/1/access"} {
 		if r := call("GET", path, "", user); r.StatusCode < 400 {
 			t.Fatal("unsupported proxy path accepted", path)
 		}
@@ -89,5 +89,64 @@ func TestMaterialAdapterCredentialBindingAndNoRedirects(t *testing.T) {
 	_, _ = f.s.store.db.Exec("UPDATE sessions SET expires=?", time.Now().Add(-time.Minute).Unix())
 	if r := call("GET", "/quota", "", user); r.StatusCode != 401 {
 		t.Fatal("expired app session accepted")
+	}
+}
+
+func TestRemoteEvidenceRemainsServerSideAndIsTurnBound(t *testing.T) {
+	f := oldAuth(t)
+	f.callback(t, f.start(t, ""))
+	_, session := f.session(t)
+	user := session["user"].(map[string]any)["id"].(string)
+	var hash string
+	if err := f.s.store.db.QueryRow("SELECT token_hash FROM entry_sessions").Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	path := "/materials/1/content"
+	doc := remoteDocument{ID: "old-site:material:1", Kind: "past_paper", Title: "高数", Chunks: []remoteSource{
+		{DocumentID: "old-site:material:1", ChunkID: "old-site:material:1:0", Text: "private-question 选项甲 选项乙", Location: "第 1 页"},
+	}}
+	raw, _ := json.Marshal(doc)
+	f.s.remoteCache.put("document:"+hash+":"+path, raw, time.Minute)
+	call := func(method, path, body string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, f.app.URL+path, strings.NewReader(body))
+		req.Header.Set("Origin", f.s.cfg.oldSite.publicURL)
+		req.Header.Set("X-Cram-User", user)
+		response, err := f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		data, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(data)
+	}
+	for _, endpoint := range []string{"/parsed", "/evidence?turnId=turn&callId=read"} {
+		status, data := call("GET", "/api/old-site/materials/1"+endpoint, "")
+		if status != 200 || strings.Contains(data, "private-question") {
+			t.Fatalf("%d %s", status, data)
+		}
+	}
+	var request modelRequest
+	if err := json.Unmarshal([]byte(`{"turnId":"turn","messages":[{"role":"assistant","tool_calls":[{"id":"read","function":{"name":"read_old_site"}}]},{"role":"tool","tool_call_id":"read","content":"{\"remoteEvidence\":true}"}]}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	other := request
+	other.Messages = append([]wireMessage(nil), request.Messages...)
+	f.s.injectRemoteEvidence("different-session", &other)
+	if strings.Contains(other.Messages[1].Content, "private-question") {
+		t.Fatal("cross-session evidence leak")
+	}
+	f.s.injectRemoteEvidence(hash, &request)
+	if !strings.Contains(request.Messages[1].Content, "private-question") {
+		t.Fatal("model did not receive evidence")
+	}
+	status, data := call("POST", "/api/old-site-verify", `{"turnId":"turn","calls":["read"],"refs":[{"documentId":"old-site:material:1","chunkId":"old-site:material:1:0"}],"parts":["private-question","选项甲","选项乙"]}`)
+	if status != 200 || !strings.Contains(data, `"verified":true`) {
+		t.Fatalf("%d %s", status, data)
+	}
+	key := evidenceKey(hash, "turn", "read")
+	f.s.remoteCache.put(key, raw, -time.Second)
+	if f.s.remoteCache.get(key) != nil {
+		t.Fatal("expired data retained")
 	}
 }

@@ -131,12 +131,12 @@ export function MaterialComposer({session, scope, disabled, onChange, onBusy, on
    <p className="materials-hint" aria-label="本轮资料范围" role="status">{!selected.length?'尚未勾选资料，没有可检索的本地文件。请勾选下方文件、导入其他资料，或直接在问题中粘贴原文；也可明确选择按通用知识回答。':`本轮已选 ${selected.length} 份资料，仅检索已选文件的可用文本；勾选不代表已读取全文。可取消勾选或移除以调整范围。`}</p>
    <ul className="material-list">{scope.documents.map(doc=><li key={doc.id}>
    <label><input type="checkbox" aria-label={`使用资料 ${doc.title}`} disabled={locked} checked={scope.selectedIds.includes(doc.id)} onChange={e=>onChange({...scope,selectedIds:e.target.checked?[...scope.selectedIds,doc.id]:scope.selectedIds.filter(id=>id!==doc.id)})}/>{doc.title}</label>
-   <small>{doc.chunks.length} 个文本块</small>
+   <small>{doc.chunkCount??doc.chunks.length} 个文本块</small>
    {doc.remoteRef&&<a href={doc.remoteRef.url} target="_blank" rel="noreferrer">旧站原资料</a>}
    <select aria-label={`资料类型 ${doc.title}`} disabled={locked} value={doc.kind??'material'} onChange={e=>onChange({...scope,documents:scope.documents.map(d=>d.id===doc.id?{...d,kind:e.target.value as Document['kind']}:d)})}><option value="material">普通资料</option><option value="past_paper">历年试题（自行确认）</option></select>
-   <button type="button" disabled={!doc.chunks.length} onClick={()=>onSource(doc.chunks[0])}>查看文本：{doc.title}</button>
+   {doc.chunks.length>0 && <button type="button" onClick={()=>onSource(doc.chunks[0])}>查看文本：{doc.title}</button>}
    <button type="button" disabled={locked} onClick={()=>onChange({documents:scope.documents.filter(d=>d.id!==doc.id),selectedIds:scope.selectedIds.filter(id=>id!==doc.id)})}>移除：{doc.title}</button>
-   {!doc.chunks.length&&<p className="material-warning">没有可用文本。请取消勾选并移除此资料，换用可复制文本的文件重新导入。</p>}
+   {!doc.chunks.length&&!doc.chunkCount&&<p className="material-warning">没有可用文本。请取消勾选并移除此资料，换用可复制文本的文件重新导入。</p>}
    {doc.warnings.map((warning,i)=><p className="material-warning" key={i}>{warning}</p>)}
    {!!doc.warnings.length&&<p className="material-warning">请查看缓存文本并对照原文件；缺失内容可另存为 TXT／Markdown 补充导入，或取消勾选此资料后重选。</p>}
   </li>)}</ul>
@@ -181,6 +181,7 @@ export function MaterialComposer({session, scope, disabled, onChange, onBusy, on
    if(entryContext?.importId)sessionStorage.setItem(`cram-entry:${session.user.id}:${JSON.stringify(entryContext)}`,'1');
    setRemoteOpen(false);setEntryContext(undefined);
   }} initial={entryContext} onImport={incoming=>{
+   if(entryContext?.importId)setNotice(`已导入并选中 ${incoming.length} 份课程资料。`);
    const documents=[...scope.documents],selectedIds=new Set(scope.selectedIds);
    for(const doc of incoming){const index=documents.findIndex(d=>d.id===doc.id);if(index>=0)documents[index]=doc;else documents.push(doc);selectedIds.add(doc.id);}
    onChange({documents,selectedIds:[...selectedIds]});

@@ -9,7 +9,7 @@
 - 默认浅色，支持手动切换深色；选择保存在当前浏览器。
 - concept、review、exam 三种教学 Skill；按当前请求组织讲解、复习和练习，保存会话偏好、课程、章节和学习位置。
 - 单选题支持自编、基于已读资料改编，以及经原文核对的真题；作答和查看解析在本地完成，不调用模型。
-- 本地文件导入与旧站课程资料导入，共用浏览器 Worker 解析、勾选范围、文本阅读与来源查看。旧站支持单份资料、课程包分页目录、免费在线预览、待读清单批量确认及按条目读取；读取失败的资料保留供重试。
+- 本地文件导入与旧站课程资料导入，共用资料选择与引用。用户上传由浏览器解析，旧站资料由服务端解析。旧站支持单份资料、课程包分页目录、免费在线预览、待读清单批量确认及按条目读取；读取失败的资料保留供重试。
 - 消息、作答、资料缓存、勾选和学习状态按账号保存在当前浏览器；支持刷新恢复、保存状态提示和存储失败重试。
 
 当前能力与限制以本 README、[架构与模块契约](项目架构与模块契约.md) 和代码为准。日期命名的交付报告是历史记录，索引见 [文档目录](docs/README.md)。
@@ -24,8 +24,8 @@ React UI → PiAgentAdapter → Pi Agent Core → /api/model → Go/Gin → Deep
              UI / IndexedDB
 
 课程资料 UI → Go 旧站适配器 → 旧站授权与资料 API
-      ↓
-浏览器 Worker 解析 → 当前对话已选文本
+                         ↓
+                    服务端解析与短时缓存 → 模型证据
 ~~~
 
 Agent 循环和工具在浏览器执行，Go 转发单次模型请求，并负责身份、旧站接入、预算与并发。模型密钥和旧站受限凭据留在服务端。聊天和文件全文不存入服务端数据库；模型只收到有效历史、已选资料元数据及本轮实际读取的片段。
@@ -70,7 +70,7 @@ npm run dev
 
 模型未配置时仍可导入、查看资料和恢复记录，发送及重试会禁用；配置后可用“重新检查模型状态”恢复。APP_ALLOW_GUEST=1 仅用于 internal 模式的免口令访问，不能绕过 old-site 模式的账号准入。
 
-生产前端构建使用 npm run build；Go 直接服务静态产物时，默认 APP_STATIC_DIR=dist。构建会生成教学内容模块并复制 PDF.js 本地资源，部署必须包含完整 dist。
+生产前端构建使用 npm run build；Go 直接服务静态产物时，默认 APP_STATIC_DIR=dist。构建会生成教学内容模块并复制 PDF.js 本地资源，部署必须包含完整 dist 及同级 material-parser 目录。
 
 ## 旧站授权与配置
 
@@ -99,7 +99,9 @@ npm run dev
 
 ## 资料阅读与引用
 
-从“添加”导入本地文件，或在已授权的旧站会话中选择“搜索课程资料”。搜索和查看目录免费。从破壁计划资料页点击「用 Cramameleon 复习」会自动导入支持的资料，超出当前对话容量时打开目录供选择。通过搜索添加时，选择资料后确认读取。下载权益、周期与扣次由旧站判定，取消或解析失败不会自动退回已扣额度；同一读取请求重试复用回执。本机已有缓存的资料可直接复用。
+从「添加」可上传本地文件或搜索课程资料。旧站资料直接进入时，在输入框附近显示导入进度；超出对话容量时可手动打开课程包目录。旧站资料在服务端读取和解析，浏览器只保存资料标识和来源元数据。Cramameleon 读取不消耗破壁计划下载额度。
+
+已授权会话可让 Agent 搜索破壁计划，每轮最多两次搜索及两次远程读取。解析缓存按应用会话隔离，15 分钟到期；本轮模型证据绑定应用会话、轮次和工具调用，4 分钟到期。进程内缓存最多 32 MiB，解析最多两项并发，单次最多 90 秒。
 
 导入并勾选后，Agent 可使用：
 
@@ -142,7 +144,7 @@ npm run dev
 | GET /api/old-site/quota | 旧站下载权益 |
 | GET /api/old-site/materials、packages | 搜索；在资源 ID 后查询详情、课程包 items 目录 |
 | POST /api/old-site/materials/:id/access、packages/:id/access | 资料读取授权与幂等回执 |
-| GET /api/old-site/materials/:id/content、packages/:id/items/:itemId/content | 按读取授权取得文件字节 |
+| GET /api/old-site/…/parsed、…/evidence | 旧站资料的引用元数据及本轮证据标识 |
 
 业务接口要求有效应用会话；旧站资料请求绑定当前用户，后端只转发固定旧站和白名单路径。常见错误包括 AUTH_REQUIRED、ENTRY_NOT_ALLOWED、MATERIAL_AUTH_EXPIRED、QUOTA_EXCEEDED、MODEL_NOT_CONFIGURED、BUDGET_EXCEEDED、TOTAL_BUDGET_EXCEEDED、CONCURRENCY_LIMIT、MODEL_STREAM_INTERRUPTED、MODEL_OUTPUT_LIMIT 和 STORAGE_FAILED。
 
