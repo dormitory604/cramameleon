@@ -1,7 +1,7 @@
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import type { AssistantMessage, JsonObject, Message, Model, SimpleStreamOptions, TranscriptContext } from '@earendil-works/pi-ai';
 import { AppError, CONTRACT_VERSION, parseModelEvent } from '../contracts/index.ts';
-import type { AgentInput, ModelUsage } from '../contracts/index.ts';
+import type { AgentInput, ModelStreamEvent, ModelUsage } from '../contracts/index.ts';
 export const emptyUsage = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
 export function wireContext(messages: Message[]) {
   const tools = new Map<string, { type: string; function: { name: string; description: string; parameters: object } }>();
@@ -22,7 +22,7 @@ export function wireContext(messages: Message[]) {
   }
   return { messages: [{ role: 'system', content: system.join('\n\n') }, ...history], tools: [...tools.values()] };
 }
-export function createModelStream(input: AgentInput, callbacks: { started: () => void; usage: (u: ModelUsage) => void; error: (e: AppError) => void; policy?: () => { disabled: string[]; instruction: string } }, fetcher: typeof fetch = fetch, userId = '') {
+export function createModelStream(input: AgentInput, callbacks: { started: () => void; usage: (u: ModelUsage) => void; error: (e: AppError) => void; quizCandidate?: (event: Extract<ModelStreamEvent, { type:'quiz_candidate' }>, signal: AbortSignal) => Promise<void>; policy?: () => { disabled: string[]; instruction: string } }, fetcher: typeof fetch = fetch, userId = '') {
   return (model: Model<any>, context: TranscriptContext, options?: SimpleStreamOptions) => {
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id, stopReason: 'pending', timestamp: Date.now(), usage: emptyUsage() };
@@ -50,7 +50,7 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
         const decoder = new TextDecoder();
         let pending = '';
         stream.push({ type: 'start', partial: message });
-        const consume = (line: string) => {
+        const consume = async (line: string) => {
           if (!line.startsWith('data:')) return;
           if (finish) throw new AppError('MODEL_PROTOCOL', '模型终止后仍有数据');
           const event = parseModelEvent(JSON.parse(line.slice(5).trim()));
@@ -64,6 +64,8 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
             if (index < 0) { index = message.content.length; message.content.push({ type: 'text', text: '' }); stream.push({ type: 'text_start', contentIndex: index, partial: message }); }
             const b = message.content[index]; if (b.type === 'text') b.text += event.delta;
             stream.push({ type: 'text_delta', delta: event.delta, contentIndex: index, partial: message });
+          } else if (event.type === 'quiz_candidate') {
+            if (!policy?.disabled.includes('present_quiz')) await callbacks.quizCandidate?.(event, options?.signal ?? input.signal);
           } else if (event.type === 'tool_call') {
             const toolCall = { type: 'toolCall' as const, id: event.id, name: event.name, arguments: event.arguments as JsonObject };
             message.content.push(toolCall);
@@ -83,10 +85,10 @@ export function createModelStream(input: AgentInput, callbacks: { started: () =>
           if (done) break;
           pending += decoder.decode(value, { stream: true });
           let split: number;
-          while ((split = pending.indexOf('\n')) >= 0) { consume(pending.slice(0, split).replace(/\r$/, '')); pending = pending.slice(split + 1); }
+          while ((split = pending.indexOf('\n')) >= 0) { await consume(pending.slice(0, split).replace(/\r$/, '')); pending = pending.slice(split + 1); }
           if (pending.length > 262144) throw new AppError('MODEL_PROTOCOL', '模型流分片过长');
         }
-        pending += decoder.decode(); if (pending.trim()) consume(pending);
+        pending += decoder.decode(); if (pending.trim()) await consume(pending);
         if (!finish) throw new AppError('MODEL_STREAM_INTERRUPTED', '模型连接提前关闭，请手动重试');
         if (finish === 'length') throw new AppError('MODEL_OUTPUT_LIMIT', '回答达到输出上限，已保留收到的内容。可缩小问题后重试。');
         message.stopReason = finish;

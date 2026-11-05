@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { quizBoards } from '../contracts/index.ts';
 import type { AgentAction, AppSession, ChatMessage, EntryConfig, Source } from '../contracts/index.ts';
 import { MaterialComposer } from './Materials.tsx';
 import { SourceViewer } from './SourceViewer.tsx';
@@ -36,7 +37,7 @@ function scopedMessages(messages: ChatMessage[], conversationId: string, selecte
   // Older records have no turn scope. Treat their known citations as one scope,
   // including uncited follow-ups that may paraphrase those same materials.
   const legacyScope = [...new Set(current.filter(message => message.selectedMaterialIds === undefined)
-    .flatMap(message => [...message.sources ?? [], ...message.quiz?.sources ?? []].map(source => source.documentId)))];
+    .flatMap(message => [...message.sources ?? [], ...quizBoards(message).flatMap(({ quiz }) => quiz.sources)].map(source => source.documentId)))];
   const compatible = (message: ChatMessage) => {
     const scope = message.selectedMaterialIds ?? legacyScope;
     // A turn stays usable while every material it saw is still selected; adding
@@ -119,11 +120,11 @@ export function App() {
   }, [messages, materials, states]);
   const visibleConversations = authenticated ? conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase())) : [];
   const current = authenticated ? messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId) : [];
-  const currentQuiz = [...current].reverse().find(message => message.quiz);
+  const currentQuiz = [...current].reverse().find(message => quizBoards(message).length > 0);
   // The quiz stays current for followups until the learner moves on: it is the
   // latest turn, or later turns have not moved the learning state to another phase.
   const lastMessage = current.at(-1);
-  const nextQuestionAvailable = !!currentQuiz?.revealed && ['completed', 'waiting'].includes(currentQuiz.status ?? '')
+  const nextQuestionAvailable = !!currentQuiz && quizBoards(currentQuiz).every(board => board.revealed) && ['completed', 'waiting'].includes(currentQuiz.status ?? '')
     && ['completed', 'waiting'].includes(lastMessage?.status ?? '')
     && (lastMessage === currentQuiz || !['learning', 'scope'].includes(states[conversationId]?.phase ?? ''));
   const canRun = authenticated && loaded && appSession?.modelReady && !busy && !importing && !leaving && !editing;
@@ -303,7 +304,7 @@ export function App() {
           switch (event.type) {
             case 'text_delta': return { ...message, text: message.text + event.delta };
             case 'tool_status': return { ...message, logs: [...message.logs ?? [], event.message], modelRequests: (message.modelRequests ?? 0) + Number(event.category === 'model' && event.status === 'started'), toolCalls: (message.toolCalls ?? 0) + Number(event.category === 'tool' && event.status === 'started') };
-            case 'quiz_ready': return { ...message, quiz: event.quiz };
+            case 'quiz_ready': return { ...message, quizzes: [...quizBoards(message), { quiz: event.quiz }] };
             case 'sources_ready': return { ...message, sources: event.sources };
             case 'error': return { ...message, error: recoveryErrors[event.code] ?? event.message, errorCode: event.code };
             case 'done': return { ...message, status: event.status };
@@ -320,6 +321,10 @@ export function App() {
         if (!modelNotConfigured) void refreshSession();
       }
     }
+  }
+  function revealQuiz(messageId: string, quizId: string, selectedOption?: string) {
+    updateMessage(messageId, message => ({ ...message, quizzes: quizBoards(message).map(board =>
+      board.quiz.id === quizId && !board.revealed ? { ...board, selectedOption, revealed: true } : board) }));
   }
   function nextQuestion() {
     if (nextQuestionAvailable) void run('请出下一题。', undefined, { type: 'next_question' });
@@ -404,7 +409,8 @@ export function App() {
             <p>提问、理解概念、系统复习或者做题，都可以直接说。</p>
           </div>}
           {current.map((message, index) => {
-            const sources = [...new Map([...(message.sources ?? []), ...(message.quiz?.sources ?? [])].map(item => [JSON.stringify([item.documentId, item.chunkId]), item])).values()];
+            const boards = quizBoards(message);
+            const sources = [...new Map([...(message.sources ?? []), ...boards.flatMap(({ quiz }) => quiz.sources)].map(item => [JSON.stringify([item.documentId, item.chunkId]), item])).values()];
             return message.role === 'user'
             ? <article key={message.id} className="msg user"><div className={`user-message${editing?.id === message.id ? ' editing' : ''}`}>
               {editing?.id === message.id
@@ -420,19 +426,19 @@ export function App() {
               </details>}
               {message.text ? <Markdown className="msg-text" text={message.role === 'assistant' ? stripQuizRecords(message.text) : message.text} streaming={message.status === 'running'}/> : message.status === 'running' && <div className="thinking"><span/><span/><span/></div>}
               {message.error && <div role="alert" className="error-card">{message.error}</div>}
-              {message.quiz && <div className="quiz">
-                <div className="quiz-top"><span>练习题</span><span>{message.quiz.origin === 'generated' ? '自编' : message.quiz.origin === 'adapted' ? '改编' : '真题'} · 单选题</span></div>
-                <h3><Markdown inline text={message.quiz.question}/></h3>
-                <div className="quiz-options">{message.quiz.options.map(option => <button key={option.id} disabled={!!message.revealed || leaving} className={`quiz-option ${message.revealed ? option.id === message.quiz!.correctOptionId ? 'correct' : option.id === message.selectedOption ? 'incorrect' : '' : ''}`} onClick={() => updateMessage(message.id, item => ({ ...item, selectedOption: option.id, revealed: true }))}><span className="option-key">{option.id}</span><Markdown inline text={option.text}/>{message.revealed && option.id === message.quiz!.correctOptionId && <b>✓</b>}</button>)}</div>
-                {message.revealed
-                  ? <div className="quiz-feedback"><strong className={!message.selectedOption ? undefined : message.selectedOption === message.quiz.correctOptionId ? 'ok' : 'bad'}>{!message.selectedOption ? `正确答案：${message.quiz.correctOptionId}` : message.selectedOption === message.quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${message.quiz.correctOptionId}`}</strong>{message.quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> <Markdown inline text={option.explanation}/></p>)}</div>
-                  : <small className="quiz-hint">选择一个选项后显示答案与解析。<button disabled={leaving} onClick={() => updateMessage(message.id, item => ({ ...item, revealed: true }))}>看答案</button></small>}
-              </div>}
+              {boards.map(({ quiz, selectedOption, revealed }, quizIndex) => <div key={quiz.id} className="quiz">
+                <div className="quiz-top"><span>第 {quizIndex + 1}/{boards.length} 道题</span><span>{quiz.origin === 'generated' ? '自编' : quiz.origin === 'adapted' ? '改编' : '真题'} · 单选题</span></div>
+                <h3><Markdown inline text={quiz.question}/></h3>
+                <div className="quiz-options">{quiz.options.map(option => <button key={option.id} disabled={!!revealed || leaving} className={`quiz-option ${revealed ? option.id === quiz.correctOptionId ? 'correct' : option.id === selectedOption ? 'incorrect' : '' : ''}`} onClick={() => revealQuiz(message.id, quiz.id, option.id)}><span className="option-key">{option.id}</span><Markdown inline text={option.text}/>{revealed && option.id === quiz.correctOptionId && <b>✓</b>}</button>)}</div>
+                {revealed
+                  ? <div className="quiz-feedback"><strong className={!selectedOption ? undefined : selectedOption === quiz.correctOptionId ? 'ok' : 'bad'}>{!selectedOption ? `正确答案：${quiz.correctOptionId}` : selectedOption === quiz.correctOptionId ? '回答正确' : `回答错误，正确答案：${quiz.correctOptionId}`}</strong>{quiz.options.map(option => <p key={option.id}><b>{option.id}.</b> <Markdown inline text={option.explanation}/></p>)}</div>
+                  : <small className="quiz-hint">选择一个选项后显示答案与解析。<button disabled={leaving} onClick={() => revealQuiz(message.id, quiz.id)}>看答案</button></small>}
+              </div>)}
               {!!sources.length && <div className="sources">{sources.map(item => <button key={JSON.stringify([item.documentId, item.chunkId])} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
               {message.status !== 'running' && <div className="msg-actions">
                 <MessageTools text={stripQuizRecords(message.text)} createdAt={message.createdAt} onCopyError={() => setNotice('浏览器未允许复制，请手动选择文字。')}/>
                 {index === current.length - 1 && nextQuestionAvailable && <button disabled={!canRun} onClick={nextQuestion}>下一题</button>}
-                {index === current.length - 1 && !message.quiz && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={!canRun} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
+                {index === current.length - 1 && !boards.length && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={!canRun} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
                 {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={!canRun} onClick={() => retry(message)}>重试</button>}
               </div>}
             </article>;

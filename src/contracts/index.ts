@@ -1,17 +1,24 @@
 export const CONTRACT_VERSION = 'app.v1' as const;
 export type Source = { documentId: string; chunkId: string; title: string; text: string; location: string; page?: number; slide?: number; url?: string };
 export type Quiz = { id: string; question: string; options: { id: string; text: string; explanation: string }[]; correctOptionId: string; origin: 'generated' | 'adapted' | 'past_paper'; sources: Source[] };
+export const MAX_QUIZZES_PER_BATCH = 6;
+export type QuizBoard = { quiz: Quiz; selectedOption?: string; revealed?: boolean };
 export type RunStatus = 'running' | 'completed' | 'cancelled' | 'failed' | 'limited' | 'interrupted' | 'waiting';
 export type SkillName = 'concept' | 'review' | 'exam';
 export const TOOL_NAMES = ['present_quiz', 'read_skill', 'update_learning_state', 'search_context', 'read_context', 'cite_sources', 'search_old_site', 'read_old_site'] as const;
 export type ToolName = typeof TOOL_NAMES[number];
 export const isToolName = (name: unknown): name is ToolName => typeof name === 'string' && (TOOL_NAMES as readonly string[]).includes(name);
 export type LearningState = { preferences: string; progress: string; course?: string; chapter?: string; phase?: 'scope' | 'learning' | 'practice'; skill?: SkillName; skillVersions?: Partial<Record<SkillName, string>>; instructions?: string[]; quizPolicy?: 'allow' | 'avoid' };
-export type ChatMessage = { id: string; conversationId: string; createdAt: number; role: 'user' | 'assistant'; text: string; status?: RunStatus; logs?: string[]; modelRequests?: number; toolCalls?: number; quiz?: Quiz; selectedOption?: string; revealed?: boolean; sources?: Source[]; error?: string; errorCode?: string; replyTo?: string; editedAt?: number; editArchive?: true;
+export type ChatMessage = { id: string; conversationId: string; createdAt: number; role: 'user' | 'assistant'; text: string; status?: RunStatus; logs?: string[]; modelRequests?: number; toolCalls?: number; quizzes?: QuizBoard[]; quiz?: Quiz; selectedOption?: string; revealed?: boolean; sources?: Source[]; error?: string; errorCode?: string; replyTo?: string; editedAt?: number; editArchive?: true;
   // Material ids selected when this turn was submitted; undefined on older records.
   selectedMaterialIds?: string[];
   // Editing resumes from the state before this prompt, rather than a later turn.
   learningStateBefore?: LearningState };
+// Older saved turns store one quiz and its answer directly on the message.
+export function quizBoards(message: ChatMessage): QuizBoard[] {
+  const { quiz, selectedOption, revealed } = message;
+  return message.quizzes ?? (quiz ? [{ quiz, selectedOption, revealed }] : []);
+}
 export type HistoryMessage = { role: 'user' | 'assistant'; text: string };
 export type Document = { id: string; title: string; chunks: Source[]; warnings: string[]; kind?: 'material' | 'past_paper'; format?: string; size?: number; importedAt?: number; chunkCount?: number; fingerprint?: string; origin?: 'local' | 'old-site'; remoteRef?: { resourceId: string; kind: 'material' | 'package'; itemId?: string; url: string } };
 export type MaterialScope = { documents: Document[]; selectedIds: string[] };
@@ -37,6 +44,7 @@ export interface AgentRunner { run(input: AgentInput): AsyncGenerator<AgentEvent
 export type ModelStreamEvent =
   | { type: 'start'; requestId: string }
   | { type: 'text_delta'; delta: string }
+  | { type: 'quiz_candidate'; id: string; index: number; arguments: Record<string, unknown> }
   | { type: 'tool_call'; id: string; name: ToolName; arguments: Record<string, unknown> }
   | { type: 'usage'; usage: ModelUsage }
   | { type: 'finish'; stopReason: 'stop' | 'toolUse' | 'length' }
@@ -71,6 +79,7 @@ export function parseModelEvent(value: unknown): ModelStreamEvent {
   if (e.type === 'finish' && ['stop', 'toolUse', 'length'].includes(e.stopReason)) return e as ModelStreamEvent;
   if (e.type === 'error' && typeof e.code === 'string' && typeof e.message === 'string') return e as ModelStreamEvent;
   if (e.type === 'usage' && e.usage && ['input', 'output', 'total'].every(k => Number.isSafeInteger(e.usage[k]) && e.usage[k] >= 0) && e.usage.total === e.usage.input + e.usage.output) return e as ModelStreamEvent;
+  if (e.type === 'quiz_candidate' && typeof e.id === 'string' && e.id && Number.isInteger(e.index) && e.index >= 0 && e.index < MAX_QUIZZES_PER_BATCH && e.arguments && typeof e.arguments === 'object' && !Array.isArray(e.arguments)) return e as ModelStreamEvent;
   if (e.type === 'tool_call' && typeof e.id === 'string' && e.id && isToolName(e.name) && e.arguments && typeof e.arguments === 'object' && !Array.isArray(e.arguments)) return e as ModelStreamEvent;
   throw new AppError('MODEL_PROTOCOL', '模型流包含未知或不完整的事件');
 }

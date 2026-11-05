@@ -114,3 +114,60 @@ test('material search reports exhausted reading budget separately from no matchi
  assert.equal(exhausted[2].budgetExhausted,true);
  assert.equal(noMatches[0].budgetExhausted,false);
 });
+
+test('one streamed quiz batch publishes each validated question before the response finishes', { timeout: 3000 }, async () => {
+  const questions = [quiz, { ...quiz, question: '另一个考点' }];
+  const encoder = new TextEncoder();
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  let requests = 0;
+  const send = (event: object) => stream.enqueue(encoder.encode('data: ' + JSON.stringify(event) + '\n\n'));
+  const fetcher = (async (_url, init) => {
+    requests++;
+    const { requestId } = JSON.parse(init!.body as string);
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      stream = controller;
+      send({ type: 'start', requestId });
+      send({ type: 'quiz_candidate', id: 'batch', index: 0, arguments: questions[0] });
+    } }));
+  }) as typeof fetch;
+  const run = new PiAgentAdapter(config, fetcher).run(input());
+  const events = [];
+  for await (const event of run) {
+    events.push(event);
+    if (event.type === 'quiz_ready' && event.quiz.question === questions[0].question) {
+      send({ type: 'quiz_candidate', id: 'batch', index: 1, arguments: questions[1] });
+    } else if (event.type === 'quiz_ready') {
+      assert.equal(event.quiz.question, questions[1].question);
+      send({ type: 'tool_call', id: 'batch', name: 'present_quiz', arguments: { quizzes: questions } });
+      send({ type: 'finish', stopReason: 'toolUse' });
+      stream.close();
+    }
+  }
+  assert.equal(requests, 1);
+  assert.equal(events.filter(event => event.type === 'quiz_ready').length, 2);
+  assert.equal(events.filter(event => event.type === 'tool_status' && event.category === 'tool' && event.status === 'started').length, 1);
+  assert.deepEqual(events.at(-1), { sessionId: 'chat-a', turnId: 'turn-a', type: 'done', status: 'waiting' });
+});
+
+test('a batch with a rejected question repairs just that question', async () => {
+  const questions = [quiz, { ...quiz, question: '修正后的考点' }];
+  let requests = 0;
+  const fetcher = (async (_url, init) => {
+    const body = JSON.parse(init!.body as string);
+    const first = ++requests === 1;
+    const submitted = first ? [questions[0], { ...questions[1], correctOptionId: 'missing' }] : [questions[1]];
+    if (!first) assert.match(body.messages.at(-1).content, /已展示 1 道题.*只修复未通过的题/);
+    const id = 'batch-' + requests;
+    const events = [
+      { type: 'start', requestId: body.requestId },
+      ...submitted.map((args, index) => ({ type: 'quiz_candidate', id, index, arguments: args })),
+      { type: 'tool_call', id, name: 'present_quiz', arguments: { quizzes: submitted } },
+      { type: 'finish', stopReason: 'toolUse' },
+    ];
+    return new Response(events.map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''));
+  }) as typeof fetch;
+  const events = await Array.fromAsync(new PiAgentAdapter(config, fetcher).run(input()));
+  assert.equal(requests, 2);
+  assert.deepEqual(events.filter(event => event.type === 'quiz_ready').map(event => event.quiz.question), questions.map(question => question.question));
+  assert.deepEqual(events.at(-1), { sessionId: 'chat-a', turnId: 'turn-a', type: 'done', status: 'waiting' });
+});

@@ -107,3 +107,19 @@ test('source-backed quiz continuation keeps actual local answer within the final
   assert.equal(text.split('题目记录：').length - 1, 1);
   assert.deepEqual(messages, snapshot, 'projection must leave cached quiz and sources unchanged');
 });
+
+test('the current batch keeps separate answers when one question exceeds the history budget', () => {
+  const messages = [
+    message('u1', 'user', '出两道题'),
+    message('a1', 'assistant', '', { quizzes: [
+      { quiz: { ...quiz, id: 'oversized', question: '条件'.repeat(7000) }, selectedOption: 'B', revealed: true },
+      { quiz: { ...quiz, id: 'small' }, revealed: true },
+    ] }),
+  ];
+  const history = buildLearningHistory(messages, 'study');
+  assertBoundsAndPairs(history);
+  const text = history[1].text;
+  assert.match(text, /"omitted":true[^\n]+"id":"oversized"[^\n]*\n用户作答：B（回答错误）/);
+  assert.match(text, /"id":"small"[^\n]*\n用户作答：已查看答案，未选择选项/);
+  assert.ok(text.includes(quiz.question));
+});

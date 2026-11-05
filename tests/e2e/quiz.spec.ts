@@ -223,3 +223,60 @@ test('local feedback stays available for followup and only an explicit next acti
  await expect(page.locator('.quiz').last()).toContainText('回答正确');
  expect(requests).toHaveLength(count);
 });
+
+test('a single model response updates board totals as questions arrive and keeps answers separate', async ({ page }) => {
+ await page.addInitScript(({ first, second }) => {
+  const fetchOriginal = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+   if (input !== '/api/model') return fetchOriginal(input, init);
+   const { requestId } = JSON.parse(init!.body as string);
+   const encoder = new TextEncoder();
+   return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) {
+    const send = (event: object) => controller.enqueue(encoder.encode('data: ' + JSON.stringify(event) + '\n\n'));
+    send({ type: 'start', requestId });
+    send({ type: 'quiz_candidate', id: 'batch', index: 0, arguments: first });
+    window.addEventListener('finish-test-quiz-batch', () => {
+     send({ type: 'quiz_candidate', id: 'batch', index: 1, arguments: second });
+     send({ type: 'tool_call', id: 'batch', name: 'present_quiz', arguments: { quizzes: [first, second] } });
+     send({ type: 'finish', stopReason: 'toolUse' });
+     controller.close();
+    }, { once: true });
+   } })));
+  };
+ }, { first: quiz, second: nextQuiz });
+ await setup(page, () => { throw new Error('Unexpected HTTP model request'); });
+ await page.getByLabel('输入消息').fill('出两道题');
+ await page.getByRole('button', { name: '发送消息', exact: true }).click();
+ const boards = page.locator('.quiz');
+ await expect(boards).toHaveCount(1);
+ await expect(boards.first().locator('.quiz-top')).toContainText('第 1/1 道题');
+ await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+ await boards.first().getByRole('button', { name: 'A 0.5', exact: true }).click();
+
+ await page.evaluate(() => window.dispatchEvent(new Event('finish-test-quiz-batch')));
+ await expect(boards).toHaveCount(2);
+ await expect(boards.first().locator('.quiz-top')).toContainText('第 1/2 道题');
+ await expect(boards.last().locator('.quiz-top')).toContainText('第 2/2 道题');
+ await expect(page.locator('.tool-count')).toHaveText('1 次模型请求 · 1 次工具调用');
+ await expect(boards.first()).toContainText('回答正确');
+ await expect(boards.last().locator('.quiz-feedback')).toHaveCount(0);
+ await expect(page.getByRole('button', { name: '下一题', exact: true })).toHaveCount(0);
+ await boards.last().getByRole('button', { name: '看答案', exact: true }).click();
+ await expect(page.getByRole('button', { name: '下一题', exact: true })).toBeVisible();
+
+ await expect.poll(() => page.evaluate(() => new Promise<boolean>((resolve, reject) => {
+  const request = indexedDB.open('cramameleon', 2);
+  request.onerror = () => reject(request.error);
+  request.onsuccess = () => {
+   const db = request.result;
+   const transaction = db.transaction('users', 'readonly');
+   const saved = transaction.objectStore('users').get('quiz-user');
+   saved.onsuccess = () => resolve(!!saved.result?.messages.at(-1)?.quizzes?.[1]?.revealed);
+   saved.onerror = () => reject(saved.error);
+   transaction.oncomplete = () => db.close();
+  };
+ }))).toBe(true);
+ await page.reload();
+ await expect(boards.first()).toContainText('回答正确');
+ await expect(boards.last()).toContainText('正确答案：A');
+});

@@ -274,6 +274,13 @@ func (s *appServer) model(c *gin.Context) {
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 4096), 262144)
 	calls := map[int]*toolCall{}
+	quizDeclared := false
+	for _, tool := range v.Tools {
+		if tool.Function.Name == "present_quiz" {
+			quizDeclared = true
+		}
+	}
+	streamedQuizzes := 0
 	finish := ""
 	done := false
 	totalBytes := 0
@@ -342,6 +349,19 @@ func (s *appServer) model(c *gin.Context) {
 				if len(call.Function.Arguments) > 65536 {
 					protocolError("MODEL_PROTOCOL", "工具参数过长")
 					return
+				}
+				// Only stage the leading call. A later tool may depend on
+				// earlier tools, which Pi executes once the response ends.
+				if part.Index == 0 && quizDeclared && call.Function.Name == "present_quiz" &&
+					validID(call.ID) && streamedQuizzes < maxQuizBatch && strings.Contains(part.Function.Arguments, "}") {
+					items := quizBatchPrefix(call.Function.Arguments)
+					for streamedQuizzes < len(items) {
+						if !send(map[string]any{"type": "quiz_candidate", "id": call.ID, "index": streamedQuizzes, "arguments": items[streamedQuizzes]}) {
+							status = "cancelled"
+							return
+						}
+						streamedQuizzes++
+					}
 				}
 			}
 			if choice.FinishReason != nil {

@@ -178,6 +178,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .msg-actions button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 
 .quiz { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; background: var(--panel); overflow-wrap: anywhere; }
+.quiz + .quiz { margin-top: 12px; }
 .quiz-option > .markdown { min-width: 0; }
 .quiz-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-weight: 500; }
 .quiz-top span:last-child { color: var(--faint); font-weight: 400; }

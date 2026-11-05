@@ -91,7 +91,7 @@ test('two malformed quiz attempts count toward limit then fall back to explanati
  assert.equal(events.filter(e=>e.type==='quiz_ready').length,0);
  assert.equal(events.filter(e=>e.type==='tool_status'&&e.status==='started'&&e.category==='tool').length,2);
  assert.ok(!s.payloads[2].tools.some((t:any)=>t.function.name==='present_quiz'));
- assert.ok(s.payloads[2].messages[0].content.includes('失败两次'));
+ assert.ok(s.payloads[2].messages[0].content.includes('用完修复机会'));
  assert.equal((events.at(-1) as any).status,'completed');
 });
 test('six tools including invalid schema attempts exhaust allowance; final answer has no tools',async()=>{
@@ -130,9 +130,20 @@ test('all published exam examples produce valid quizzes with delimited LaTeX',as
  assert.equal(examples.length,2);
  for(const [index,match] of examples.entries()) {
   let rendered:any;
-  await quizTool(q=>{rendered=q;}).execute('example-'+index,JSON.parse(match[1]));
+  const batch=JSON.parse(match[1]);assert.equal(batch.quizzes.length,1);
+  await quizTool(q=>{rendered=q;}).execute('example-'+index,batch);
   assert.equal(rendered.origin,'generated');assert.equal(rendered.options.length,index===0?2:4);
   assert.match(rendered.question,/\$P\(/);
   assert.match(rendered.question+JSON.stringify(rendered.options),/\\(?:cup|cap|mid)/);
  }
+});
+
+test('concept example ends with one valid application question', async () => {
+ const { text } = readSkill('opportunity-check', 'concept');
+ const example = text.match(/present_quiz\((\{"quizzes":[^\n]+\})\)/);
+ assert.ok(example);
+ const delivered: string[] = [];
+ await quizTool(quiz => delivered.push(quiz.question)).execute('concept-check', JSON.parse(example[1]));
+ assert.equal(delivered.length, 1);
+ assert.match(delivered[0], /机会成本/);
 });

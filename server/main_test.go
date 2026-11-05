@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -380,5 +381,66 @@ func TestContentSecurityPolicyFramesOnlyOldSitePreviews(t *testing.T) {
 		if !strings.Contains(csp, want) {
 			t.Fatalf("missing %q in %s", want, csp)
 		}
+	}
+}
+
+func TestQuizBatchStreamsBeforeUpstreamCompletion(t *testing.T) {
+	s, srv, c := setup(t)
+	login(t, srv, c)
+	next := make(chan struct{})
+	mock(t, s, func(w http.ResponseWriter, r *http.Request) {
+		write := func(delta string, first bool) {
+			function := map[string]string{"arguments": delta}
+			call := map[string]any{"index": 0, "function": function}
+			if first {
+				call["id"] = "quiz-batch"
+				function["name"] = "present_quiz"
+			}
+			payload, _ := json.Marshal(map[string]any{"choices": []any{
+				map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{call}}},
+			}})
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+			w.(http.Flusher).Flush()
+		}
+		write(`{"quizzes":[{"question":"求 $\frac{1}{2}$"},{"quest`, true)
+		select {
+		case <-next:
+		case <-r.Context().Done():
+			return
+		}
+		write(`ion":"第二题"}]}`, false)
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\ndata: [DONE]\n\n")
+	})
+	v := request("streamed-quiz-batch")
+	var tool wireTool
+	_ = json.Unmarshal([]byte(`{"type":"function","function":{"name":"present_quiz","parameters":{"type":"object"}}}`), &tool)
+	v.Tools = []wireTool{tool}
+	body, _ := json.Marshal(v)
+	response, err := c.Post(srv.URL+"/api/model", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	var candidates, calls int
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, `"type":"quiz_candidate"`) {
+			candidates++
+			if candidates == 1 {
+				if !strings.Contains(line, `"index":0`) || !strings.Contains(line, `\\frac`) {
+					t.Fatal(line)
+				}
+				close(next)
+			} else if !strings.Contains(line, `"index":1`) || !strings.Contains(line, "第二题") {
+				t.Fatal(line)
+			}
+		}
+		if strings.Contains(line, `"type":"tool_call"`) {
+			calls++
+		}
+	}
+	if scanner.Err() != nil || candidates != 2 || calls != 1 {
+		t.Fatalf("candidates=%d calls=%d error=%v", candidates, calls, scanner.Err())
 	}
 }
