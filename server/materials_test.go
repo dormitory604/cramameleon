@@ -102,7 +102,7 @@ func TestRemoteEvidenceRemainsServerSideAndIsTurnBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := "/materials/1/content"
-	doc := remoteDocument{ID: "old-site:material:1", Kind: "past_paper", Title: "高数", Chunks: []remoteSource{
+	doc := remoteDocument{ID: "old-site:material:1", Kind: "past_paper", Title: "高数", Warnings: []string{"图片中的题干和公式可能缺失"}, Chunks: []remoteSource{
 		{DocumentID: "old-site:material:1", ChunkID: "old-site:material:1:0", Text: "private-question 选项甲 选项乙", Location: "第 1 页"},
 	}}
 	raw, _ := json.Marshal(doc)
@@ -137,16 +137,63 @@ func TestRemoteEvidenceRemainsServerSideAndIsTurnBound(t *testing.T) {
 		t.Fatal("cross-session evidence leak")
 	}
 	f.s.injectRemoteEvidence(hash, &request)
+	if !strings.Contains(request.Messages[1].Content, "图片中的题干和公式可能缺失") {
+		t.Fatal("model did not receive extraction warnings")
+	}
 	if !strings.Contains(request.Messages[1].Content, "private-question") {
 		t.Fatal("model did not receive evidence")
 	}
-	status, data := call("POST", "/api/old-site-verify", `{"turnId":"turn","calls":["read"],"refs":[{"documentId":"old-site:material:1","chunkId":"old-site:material:1:0"}],"parts":["private-question","选项甲","选项乙"]}`)
+	status, data := call("POST", "/api/old-site-verify", `{"turnId":"turn","calls":["missing-one","missing-two","read"],"refs":[{"documentId":"old-site:material:1","chunkId":"old-site:material:1:0"}],"parts":["private-question","选项甲","选项乙"]}`)
 	if status != 200 || !strings.Contains(data, `"verified":true`) {
 		t.Fatalf("%d %s", status, data)
+	}
+	doc.Chunks[0].Location = "第 1 页（含 OCR）"
+	ocrRaw, _ := json.Marshal(remoteEvidence{Kind: "past_paper", Chunks: doc.Chunks})
+	f.s.remoteCache.put(evidenceKey(hash, "turn", "read"), ocrRaw, time.Minute)
+	status, data = call("POST", "/api/old-site-verify", `{"turnId":"turn","calls":["read"],"refs":[{"documentId":"old-site:material:1","chunkId":"old-site:material:1:0"}],"parts":["private-question","选项甲","选项乙"]}`)
+	if status != 200 || !strings.Contains(data, `"verified":false`) {
+		t.Fatalf("OCR was treated as verified original: %d %s", status, data)
 	}
 	key := evidenceKey(hash, "turn", "read")
 	f.s.remoteCache.put(key, raw, -time.Second)
 	if f.s.remoteCache.get(key) != nil {
 		t.Fatal("expired data retained")
+	}
+}
+
+func TestRemoteCacheExpiryRemovesWholeEntry(t *testing.T) {
+	cache := &remoteCache{}
+	cache.put("document", []byte(`{"title":"exam","chunks":[{"text":"body"}]}`), -time.Second)
+	if cache.get("document") != nil || len(cache.items) != 0 || cache.size != 0 {
+		t.Fatal("expired document left metadata or bytes behind")
+	}
+	if cache.timer != nil {
+		cache.timer.Stop()
+	}
+	cache.put("document", []byte("refetched body"), time.Minute)
+	if string(cache.get("document")) != "refetched body" {
+		t.Fatal("document could not be refreshed")
+	}
+}
+
+func TestInjectThreeRemoteCandidates(t *testing.T) {
+	s := &appServer{}
+	var req modelRequest
+	req.TurnID = "turn"
+	for _, id := range []string{"one", "two", "three", "four"} {
+		var messages []wireMessage
+		if err := json.Unmarshal([]byte(`[{"role":"assistant","tool_calls":[{"id":"`+id+`","function":{"name":"read_old_site"}}]},{"role":"tool","tool_call_id":"`+id+`","content":"{\"remoteEvidence\":true}"}]`), &messages); err != nil {
+			t.Fatal(err)
+		}
+		req.Messages = append(req.Messages, messages...)
+		s.remoteCache.put(evidenceKey("session", "turn", id), []byte(`{"candidate":"`+id+`"}`), time.Minute)
+	}
+	defer s.remoteCache.timer.Stop()
+	s.injectRemoteEvidence("session", &req)
+	if !strings.Contains(req.Messages[5].Content, `"three"`) {
+		t.Fatal("third candidate evidence was lost")
+	}
+	if strings.Contains(req.Messages[7].Content, `"four"`) {
+		t.Fatal("read limit was not enforced")
 	}
 }

@@ -142,6 +142,7 @@ func parseRemoteView(c *gin.Context, path string) (string, remoteView, bool) {
 }
 
 type remoteEvidence struct {
+	Warnings  []string       `json:"warnings,omitempty"`
 	Untrusted bool           `json:"untrustedMaterial"`
 	Kind      string         `json:"kind"`
 	Chunks    []remoteSource `json:"chunks"`
@@ -172,9 +173,9 @@ func (s *appServer) sendRemoteView(c *gin.Context, view remoteView, raw []byte) 
 		fail(c, 400, "INVALID_REQUEST", "文本块位置超出资料范围")
 		return
 	}
-	result := remoteEvidence{Untrusted: true, Kind: doc.Kind, Total: len(doc.Chunks), Chunks: []remoteSource{}}
+	result := remoteEvidence{Warnings: doc.Warnings, Untrusted: true, Kind: doc.Kind, Total: len(doc.Chunks), Chunks: []remoteSource{}}
 	if view.query == "" {
-		// Up to 3600 characters per call; the Agent makes at most two remote reads per turn.
+		// Up to 3600 characters per call; the Agent makes at most three remote reads per turn.
 		end := min(len(doc.Chunks), view.start+1)
 		result.Chunks = doc.Chunks[view.start-1 : end]
 		if end < len(doc.Chunks) {
@@ -229,7 +230,7 @@ func (s *appServer) injectRemoteEvidence(session string, req *modelRequest) {
 		}
 		raw := s.remoteCache.get(evidenceKey(session, req.TurnID, message.ToolCallID))
 		message.Content = `{"error":"服务端资料证据已过期或达到本轮上限，请重新读取。"}`
-		if raw != nil && count < 2 {
+		if raw != nil && count < 3 {
 			message.Content = string(raw)
 			count++
 		}
@@ -247,7 +248,7 @@ func (s *appServer) verifyRemoteQuestion(c *gin.Context) {
 		Refs   []struct{ DocumentID, ChunkID string }
 		Parts  []string
 	}
-	if decode(c, &request) != nil || !validID(request.TurnID) || len(request.Calls) > 2 || len(request.Refs) > 6 || len(request.Parts) < 3 || len(request.Parts) > 7 {
+	if decode(c, &request) != nil || !validID(request.TurnID) || len(request.Calls) > 3 || len(request.Refs) > 6 || len(request.Parts) < 3 || len(request.Parts) > 7 {
 		fail(c, 400, "INVALID_REQUEST", "题目核对参数不正确")
 		return
 	}
@@ -271,6 +272,10 @@ func (s *appServer) verifyRemoteQuestion(c *gin.Context) {
 		for _, chunk := range evidence.Chunks {
 			for _, ref := range request.Refs {
 				if chunk.DocumentID != ref.DocumentID || chunk.ChunkID != ref.ChunkID {
+					continue
+				}
+				// OCR is useful reading evidence, but not an exact original transcription.
+				if strings.Contains(chunk.Location, "（含 OCR）") {
 					continue
 				}
 				text := normalize(chunk.Text)

@@ -9,6 +9,7 @@ cd "${CRAMAMELEON_ROOT:-$HOME/cramameleon}"
 exec 9>var/run/deploy-main.lock
 flock -w 60 9
 
+app_root=$PWD
 releases=var/pm2-releases
 live=var/pm2-current
 health=http://127.0.0.1:18085
@@ -92,11 +93,14 @@ mkdir "$stage/source" "$stage/release"
 git archive "$target" | tar -xf - -C "$stage/source"
 (
   cd "$stage/source"
+  test -x "$app_root/var/ocr/venv/bin/python" || { echo "Install formula OCR runtime in var/ocr before deploying" >&2; exit 1; }
+  "$app_root/var/ocr/venv/bin/python" scripts/ocr/check_runtime.py "$app_root/var/ocr"
   npm ci --prefer-offline --no-audit --no-fund
   npm run build
 )
 mv "$stage/source/dist" "$stage/release/dist"
 mv "$stage/source/material-parser" "$stage/release/material-parser"
+ln -s "$PWD/var/ocr" "$stage/release/ocr-runtime"
 if git diff --quiet "$current" "$target" -- server; then
   cp -p "var/$previous/cramameleon" "$stage/release/cramameleon"
 else

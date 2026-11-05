@@ -1,0 +1,8 @@
+# CPU inference only; no PyTorch or runtime model downloads.
+onnxruntime==1.23.2
+opencv-python==4.11.0.86
+numpy==1.26.4
+Pillow==11.3.0
+tokenizers==0.22.1
+rapidocr-onnxruntime==1.4.4
+PyMuPDF==1.26.6

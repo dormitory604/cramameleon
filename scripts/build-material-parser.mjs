@@ -11,3 +11,5 @@ await build({
 });
 await cp('node_modules/pdfjs-dist/legacy/build/pdf.min.mjs', 'material-parser/pdf.mjs');
 await cp('node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs', 'material-parser/pdf.worker.mjs');
+
+await cp('scripts/ocr', 'material-parser/ocr', { recursive: true });

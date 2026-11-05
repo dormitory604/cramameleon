@@ -1,3 +1,4 @@
+import { pdfTextWarnings } from './pdfQuality.ts';
 import { AppError } from '../contracts/index.ts';
 import { FILE_LIMIT, extension, supported, zipDirectory, extractEntry } from './localArchive.ts';
 import { parseLocalBytes } from './localParser.ts';
@@ -14,17 +15,16 @@ async function pdfText(bytes:Uint8Array) {
  try {
   const doc=await task.promise;
   if(doc.numPages>1000)throw new AppError('FILE_LIMIT','PDF 超过 1000 页，请拆分文件');
-  const sections:TextSection[]=[],warnings:string[]=[];let empty=0,total=0;
+  const sections:TextSection[]=[];let total=0;
   for(let page=1;page<=doc.numPages;page++) {
    const p=await doc.getPage(page);const content=await p.getTextContent();
    const text=content.items.map(item=>'str' in item?item.str+(item.hasEOL?'\n':' '):'').join('');
    total+=text.length;if(total>2_000_000)throw new AppError('FILE_LIMIT','提取文本超过 200 万字，请拆分文件');
-   if(!text.trim())empty++;
+
    sections.push({text,location:`第 ${page} 页`,page});p.cleanup();
    self.postMessage({type:'progress',message:`正在解析 PDF：${page}/${doc.numPages} 页`});
   }
-  if(empty)warnings.push(`${empty} 页未提取到文字，可能为空白页或扫描图像；暂不支持 OCR。`);
-  warnings.push('PDF 按文本层提取，多栏、表格和公式的顺序可能不完整，请对照原文。');
+  const warnings=pdfTextWarnings(sections);
   return {sections,warnings};
  } catch(error) {
   if(error instanceof AppError)throw error;

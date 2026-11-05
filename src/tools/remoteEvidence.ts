@@ -13,7 +13,7 @@ export function remoteEvidence(userId: string, turnId: string, selected: Documen
  async function read(id: string, callId: string, signal: AbortSignal | undefined, startChunk?: number, query?: string) {
   const ref = documents.get(id);
   if (!ref) throw new Error('请先搜索破壁计划，并从结果中选择一份资料读取。');
-  if (reads >= 2) throw new Error('本轮已达到两次远程读取上限。');
+  if (reads >= 3) throw new Error('本轮已达到三次远程读取上限。');
   reads++;
   const path = ref.kind === 'package' ? `/packages/${ref.resourceId}/items/${ref.itemId}/evidence` : `/materials/${ref.resourceId}/evidence`;
   const params = new URLSearchParams({ turnId, callId });
@@ -43,7 +43,7 @@ export function remoteEvidence(userId: string, turnId: string, selected: Documen
     return result({ candidates });
    },
   },
-  { name: 'read_old_site', label: '读取破壁计划资料', description: '读取本轮搜索返回的一份资料的原文片段。先搜索，再传入原样的 documentId。默认从开头读取，可用 startChunk 续读。每轮远程资料最多读取两次。',
+  { name: 'read_old_site', label: '读取破壁计划资料', description: '读取本轮搜索返回的一份资料的原文片段。先搜索，再传入原样的 documentId。默认从开头读取，可用 startChunk 续读。每轮远程资料最多读取三次。若只读到封面、页眉页脚或缺失题干，优先换另一份候选；有可用正文且需要后文时才用 startChunk 续读。',
    parameters: { type: 'object', properties: { documentId: { type: 'string' }, startChunk: { type: 'integer', minimum: 1, maximum: 1000 } }, required: ['documentId'], additionalProperties: false },
    execute: (callId, p, signal) => read(p.documentId, callId, signal, p.startChunk),
   },

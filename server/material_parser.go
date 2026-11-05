@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -36,7 +37,17 @@ func (s *appServer) parseRemoteMaterial(c *gin.Context, response *http.Response,
 	defer cancel()
 	parser := filepath.Join(s.cfg.staticDir, "..", "material-parser", "parse.mjs")
 	cmd := exec.CommandContext(ctx, "node", "--max-old-space-size=160", parser, name)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	tempDir, err := os.MkdirTemp("", "cram-parser-")
+	if err != nil {
+		fail(c, 503, "FILE_PARSE", "无法创建解析临时目录")
+		return
+	}
+	defer os.RemoveAll(tempDir)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + tempDir, "APP_OCR_PYTHON=" + os.Getenv("APP_OCR_PYTHON"), "APP_OCR_MODELS=" + os.Getenv("APP_OCR_MODELS")}
+	// OCR children must be cancelled together with the Node parser.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = io.LimitReader(response.Body, remoteFileLimit+1)
 	var output parserOutput
 	cmd.Stdout = &output
