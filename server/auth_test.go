@@ -67,7 +67,7 @@ func oldAuth(t *testing.T) *authFixture {
 	}
 	t.Cleanup(func() { db.db.Close() })
 	cfg := config{mode: "old-site", staticDir: t.TempDir(), model: "deepseek-flash", userID: "internal-developer", dailyBudget: 100000, maxInput: 64000, maxOutput: 512, timeout: time.Second,
-		oldSite: oldSiteConfig{publicURL: "http://127.0.0.1:19999", issuer: f.old.URL, entryURL: f.old.URL + "/cramameleon", authorizeURL: f.old.URL + "/authorize", tokenURL: f.old.URL + "/token", revokeURL: f.old.URL + "/revoke", clientID: "cramameleon", clientSecret: strings.Repeat("s", 32), key: []byte(strings.Repeat("k", 32)), allowed: map[string]bool{"42": true, "43": true}}}
+		oldSite: oldSiteConfig{publicURL: "http://127.0.0.1:19999", issuer: f.old.URL, entryURL: f.old.URL + "/cramameleon", authorizeURL: f.old.URL + "/authorize", tokenURL: f.old.URL + "/token", revokeURL: f.old.URL + "/revoke", clientID: "cramameleon", clientSecret: strings.Repeat("s", 32), key: []byte(strings.Repeat("k", 32))}}
 	server, router := newServer(cfg, db)
 	f.s = server
 	f.app = httptest.NewServer(router)
@@ -226,23 +226,15 @@ func TestOldSiteModeRejectsInternalLoginAndLegacySessions(t *testing.T) {
 	}
 }
 
-func TestOldSiteAllowlistExpiryAndLogout(t *testing.T) {
+func TestOldSiteAccountExpiryAndLogout(t *testing.T) {
 	f := oldAuth(t)
 	f.mu.Lock()
 	f.subject = "99"
 	f.mu.Unlock()
 	r := f.callback(t, f.start(t, ""))
-	if !strings.Contains(r.Header.Get("Location"), "ENTRY_NOT_ALLOWED") {
+	if r.Header.Get("Location") != f.s.cfg.oldSite.publicURL+"/" {
 		t.Fatal(r.Header)
 	}
-	f.mu.Lock()
-	n := f.revocations
-	f.subject = "42"
-	f.mu.Unlock()
-	if n != 1 {
-		t.Fatal("unapproved upstream grant was not revoked")
-	}
-	f.callback(t, f.start(t, ""))
 	f.s.store.db.Exec("UPDATE entry_sessions SET credential_expires=0")
 	status, v := f.session(t)
 	if status != 200 || v["oldSite"].(map[string]any)["status"] != "expired" {
@@ -286,12 +278,11 @@ func TestOldSiteConfigFailsClosed(t *testing.T) {
 	t.Setenv("OLD_SITE_CLIENT_ID", "cramameleon")
 	t.Setenv("OLD_SITE_CLIENT_SECRET", strings.Repeat("s", 32))
 	t.Setenv("APP_CREDENTIAL_KEY", strings.Repeat("ab", 32))
-	t.Setenv("APP_ALLOWED_OLD_USER_IDS", "42,43")
 	t.Setenv("APP_ACCESS_TOKEN", "")
 	if _, e := loadConfig(); e != nil {
 		t.Fatal(e)
 	}
-	for _, item := range []struct{ key, value string }{{"APP_ALLOWED_OLD_USER_IDS", ""}, {"APP_ALLOWED_OLD_USER_IDS", "*"}, {"APP_CREDENTIAL_KEY", "short"}, {"OLD_SITE_URL", "http://old.example.com"}, {"APP_PUBLIC_URL", "https://learn.example.com/other"}, {"OLD_SITE_URL", "https://untrusted@old.example.com"}} {
+	for _, item := range []struct{ key, value string }{{"APP_CREDENTIAL_KEY", "short"}, {"OLD_SITE_URL", "http://old.example.com"}, {"APP_PUBLIC_URL", "https://learn.example.com/other"}, {"OLD_SITE_URL", "https://untrusted@old.example.com"}} {
 		t.Run(item.key+item.value, func(t *testing.T) {
 			t.Setenv(item.key, item.value)
 			if _, e := loadConfig(); e == nil {
@@ -369,5 +360,54 @@ func TestAccountSwitchRejectsStaleTabBeforeModelOrLogout(t *testing.T) {
 	}
 	if code, _ := f.session(t); code != 200 {
 		t.Fatal("stale tab logged out new user")
+	}
+}
+
+func TestAutomaticImportRequiresOldSiteForm(t *testing.T) {
+	f := oldAuth(t)
+	const path = "/api/auth/old-site/start"
+	for _, origin := range []string{"", "https://untrusted.example", f.s.cfg.oldSite.publicURL, f.old.URL} {
+		req, err := http.NewRequest(http.MethodPost, f.app.URL+path, strings.NewReader("materialId=12"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", origin)
+		r, err := f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if origin != f.old.URL {
+			if r.StatusCode != 403 {
+				t.Fatalf("origin %q received %d", origin, r.StatusCode)
+			}
+			continue
+		}
+		if r.StatusCode != 303 {
+			t.Fatal(r.StatusCode)
+		}
+		redirect, err := url.Parse(r.Header.Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := redirect.Query()
+		if q.Get("context") != `{"materialId":"12"}` {
+			t.Fatal("unexpected authorization context", q.Get("context"))
+		}
+		f.mu.Lock()
+		f.challenge = q.Get("code_challenge")
+		f.mu.Unlock()
+		f.callback(t, q.Get("state"))
+		status, session := f.session(t)
+		context, _ := session["initialContext"].(map[string]any)
+		if status != 200 || context["materialId"] != "12" || context["importId"] == nil {
+			t.Fatalf("missing import intent: %d %v", status, context)
+		}
+	}
+	f.callback(t, f.start(t, "?materialId=12&importId=forged"))
+	_, session := f.session(t)
+	if context := session["initialContext"].(map[string]any); context["importId"] != nil {
+		t.Fatal("GET enabled automatic import")
 	}
 }

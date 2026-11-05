@@ -29,7 +29,6 @@ const integrationScope = "entry materials:read"
 type oldSiteConfig struct {
 	publicURL, issuer, entryURL, authorizeURL, tokenURL, revokeURL string
 	clientID, clientSecret                                         string
-	allowed                                                        map[string]bool
 	key                                                            []byte
 }
 
@@ -71,20 +70,6 @@ func (o *oldSiteConfig) load() error {
 	o.key, e = hex.DecodeString(os.Getenv("APP_CREDENTIAL_KEY"))
 	if e != nil || len(o.key) != 32 {
 		return fmt.Errorf("APP_CREDENTIAL_KEY must contain 64 hexadecimal characters")
-	}
-	o.allowed = map[string]bool{}
-	for _, id := range strings.Split(os.Getenv("APP_ALLOWED_OLD_USER_IDS"), ",") {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if !validSubject(id) {
-			return fmt.Errorf("invalid APP_ALLOWED_OLD_USER_IDS")
-		}
-		o.allowed[id] = true
-	}
-	if len(o.allowed) == 0 {
-		return fmt.Errorf("APP_ALLOWED_OLD_USER_IDS must explicitly allow at least one old-site user")
 	}
 	return nil
 }
@@ -157,10 +142,19 @@ type initialContext struct {
 	MaterialID string `json:"materialId,omitempty"`
 	PackageID  string `json:"packageId,omitempty"`
 	ItemID     string `json:"itemId,omitempty"`
+	ImportID   string `json:"importId,omitempty"`
 }
 
 func readInitialContext(c *gin.Context) (initialContext, error) {
-	v := initialContext{c.Query("materialId"), c.Query("packageId"), c.Query("itemId")}
+	get := c.Query
+	if c.Request.Method == http.MethodPost {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
+		if err := c.Request.ParseForm(); err != nil {
+			return initialContext{}, err
+		}
+		get = c.Request.PostForm.Get
+	}
+	v := initialContext{MaterialID: get("materialId"), PackageID: get("packageId"), ItemID: get("itemId")}
 	for _, id := range []string{v.MaterialID, v.PackageID, v.ItemID} {
 		if id != "" && !validSubject(id) {
 			return v, errors.New("invalid resource ID")
@@ -174,7 +168,7 @@ func readInitialContext(c *gin.Context) (initialContext, error) {
 
 func (s *appServer) startOldSiteAuth(c *gin.Context) {
 	resource, e := readInitialContext(c)
-	if e != nil {
+	if e != nil || c.Request.Method == http.MethodPost && resource.MaterialID == "" && resource.PackageID == "" {
 		fail(c, 400, "INVALID_REQUEST", "资料入口参数不正确")
 		return
 	}
@@ -200,6 +194,12 @@ func (s *appServer) startOldSiteAuth(c *gin.Context) {
 		return
 	}
 	ctxJSON, _ := json.Marshal(resource)
+	flowContext := ctxJSON
+	if c.Request.Method == http.MethodPost {
+		// Only a form submitted from the old site's resource page can request automatic import.
+		resource.ImportID = stateHash
+		flowContext, _ = json.Marshal(resource)
+	}
 	tx, e := s.store.db.BeginTx(c.Request.Context(), nil)
 	if e != nil {
 		fail(c, 503, "STORAGE_FAILED", "授权存储暂不可用")
@@ -226,7 +226,7 @@ func (s *appServer) startOldSiteAuth(c *gin.Context) {
 		fail(c, 429, "AUTH_FLOW_LIMIT", "授权请求较多，请稍后再试")
 		return
 	}
-	if _, e = tx.Exec("INSERT INTO auth_flows VALUES(?,?,?,?,?)", stateHash, tokenHash(browser), sealed, string(ctxJSON), now+300); e != nil {
+	if _, e = tx.Exec("INSERT INTO auth_flows VALUES(?,?,?,?,?)", stateHash, tokenHash(browser), sealed, string(flowContext), now+300); e != nil {
 		fail(c, 503, "STORAGE_FAILED", "无法保存授权流程")
 		return
 	}
@@ -313,11 +313,6 @@ func (s *appServer) finishOldSiteAuth(c *gin.Context) {
 	var identity entryToken
 	if e != nil || len(body) > 16384 || json.Unmarshal(body, &identity) != nil || identity.Issuer != s.cfg.oldSite.issuer || !validSubject(identity.Subject) || len(identity.AccessToken) < 32 || len(identity.AccessToken) > 4096 || identity.ExpiresIn <= 0 || identity.ExpiresIn > 8*3600 || identity.Scope != integrationScope {
 		s.entryFailed(c, "AUTH_RESPONSE_INVALID")
-		return
-	}
-	if !s.cfg.oldSite.allowed[identity.Subject] {
-		s.revokeCredential(ctx, identity.AccessToken)
-		s.entryFailed(c, "ENTRY_NOT_ALLOWED")
 		return
 	}
 	token, e := randomToken()
@@ -432,8 +427,8 @@ func (s *appServer) authenticate(c *gin.Context) {
 			fail(c, 503, "STORAGE_FAILED", "会话存储暂不可用")
 			return
 		}
-		if issuer != s.cfg.oldSite.issuer || !s.cfg.oldSite.allowed[subject] {
-			fail(c, 403, "ENTRY_NOT_ALLOWED", "当前账号尚未获得内测资格")
+		if issuer != s.cfg.oldSite.issuer || !validSubject(subject) {
+			fail(c, 401, "AUTH_REQUIRED", "请从破壁计划重新进入")
 			return
 		}
 		c.Set("userName", name)

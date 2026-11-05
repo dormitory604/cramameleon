@@ -184,7 +184,7 @@ export function App() {
   useEffect(() => {
     void refreshHealth();
     const entryError=new URLSearchParams(location.search).get('entryError');
-    if(entryError){setNotice(entryError==='ENTRY_NOT_ALLOWED'?'当前账号尚未获得内测资格，请联系项目维护者。':entryError==='OLD_SITE_UNAVAILABLE'?'暂时无法连接破壁计划，请稍后重新进入。':'本次进入授权未完成，请从破壁计划重新进入。');history.replaceState(null,'',location.pathname);}
+    if(entryError){setNotice(entryError==='OLD_SITE_UNAVAILABLE'?'暂时无法连接破壁计划，请稍后重新进入。':'本次进入授权未完成，请从破壁计划重新进入。');history.replaceState(null,'',location.pathname);}
     void refreshSession(true);
     return () => { sessionGeneration.current++; active.current?.controller.abort(); };
   }, []);
@@ -294,7 +294,7 @@ export function App() {
         if (active.current?.id !== id || event.turnId !== id || event.sessionId !== conversationId) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         if (event.type === 'state_update') { setStates(previous => ({ ...previous, [conversationId]: event.state })); continue; }
-        if (event.type === 'error' && ['AUTH_REQUIRED','SESSION_CHANGED','ENTRY_NOT_ALLOWED'].includes(event.code)) { revokeAccess(); continue; }
+        if (event.type === 'error' && ['AUTH_REQUIRED','SESSION_CHANGED'].includes(event.code)) { revokeAccess(); continue; }
         if (event.type === 'error' && event.code === 'MODEL_NOT_CONFIGURED') {
           modelNotConfigured = true;
           setAppSession(previous => previous ? { ...previous, modelReady: false } : previous);
