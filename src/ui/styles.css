@@ -282,6 +282,25 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .remote-confirm { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 18px; font-size: 13px; }
 .remote-confirm button.primary { background: var(--text); color: var(--panel); font-weight: 600; margin-top: 8px; }
 .remote-error { white-space: pre-wrap; }
+.remote-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+.remote-preview { position: relative; margin: 14px 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--hover); }
+.remote-preview iframe, .remote-preview img { display: block; width: 100%; height: min(50vh, 520px); border: 0; background: #fff; }
+.remote-preview img { object-fit: contain; background: var(--hover); }
+.remote-preview figcaption { padding: 8px 12px; font-size: 12px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--border); }
+.remote-preview-loading { position: absolute; inset: 0 0 auto; margin: 0; padding: 12px; font-size: 13px; color: var(--muted); pointer-events: none; }
+.remote-preview-empty { padding: 16px 12px; font-size: 13px; color: var(--muted); text-align: center; }
+.remote-preview-panel .remote-preview { margin-top: 8px; }
+.remote-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.remote-catalog-row { display: flex; align-items: flex-start; border-bottom: 1px solid var(--border); }
+.remote-catalog-row label { flex: 1; min-width: 0; border-bottom: 0; }
+.remote-materials .remote-catalog-row .remote-preview-toggle { flex: none; margin: 7px 8px 7px 0; padding: 4px 10px; font-size: 12px; }
+.remote-materials .remote-preview-toggle[aria-pressed=true] { background: var(--hover); }
+.remote-basket { margin: 0 0 16px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.remote-basket ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.remote-basket li { display: flex; align-items: center; gap: 8px; }
+.remote-materials .remote-basket-open { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+.remote-basket-open small { display: block; font-size: 12px; color: var(--muted); }
+.remote-basket button.primary { background: var(--text); color: var(--panel); font-weight: 600; }
 @media (max-width: 600px) { .remote-materials { padding: 24px 16px; } .remote-search input { order: 3; min-width: 100%; } }
 .source-modal select { max-width: 100%; margin: 0 0 12px 8px; }
 @media (max-width: 760px) {

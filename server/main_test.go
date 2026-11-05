@@ -345,3 +345,15 @@ func TestMultipleTeachingCallsAndUndeclaredTool(t *testing.T) {
 		t.Fatal("partial unsafe batch emitted", body)
 	}
 }
+
+func TestContentSecurityPolicyFramesOnlyOldSitePreviews(t *testing.T) {
+	if csp := contentSecurityPolicy(""); !strings.Contains(csp, "frame-src 'self';") || strings.Contains(csp, "officeapps") {
+		t.Fatalf("guest policy must not allow external frames: %s", csp)
+	}
+	csp := contentSecurityPolicy("https://arxiv.example.com")
+	for _, want := range []string{"frame-src 'self' https://arxiv.example.com https://view.officeapps.live.com;", "img-src 'self' data: https://arxiv.example.com;", "frame-ancestors 'none'", "connect-src 'self';"} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("missing %q in %s", want, csp)
+		}
+	}
+}

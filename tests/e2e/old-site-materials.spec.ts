@@ -37,3 +37,65 @@ test('browse is free; explicit package import retries one receipt, parses select
  await dialog.getByRole('button',{name:/概率论课程包/}).click();await dialog.getByRole('checkbox',{name:/lecture.txt/}).check();await dialog.getByRole('button',{name:'确认读取 1 份文件'}).click();await expect(dialog).toHaveCount(0);
  expect(requestIds).toHaveLength(2);expect(contents).toBe(2);
 });
+
+test('material detail previews the old-site file for free and a reading list imports several materials at once', async ({ page }) => {
+ const user='arxiv-material-fixture';const accessed:string[]=[];
+ const quota={total:10,used:0,remaining:10,cycleStart:'2026-11-01T00:00:00Z',cycleEnd:'2026-11-08T00:00:00Z'};
+ const material=(id:string,title:string,format:string,alreadyDownloaded=false)=>({id,kind:'material',title,courseName:'',format,size:2048,url:`https://materials.example.com/material/${id}`,availability:'available',alreadyDownloaded});
+ const linear=material('21','线性代数讲义','md');const exam=material('22','线代期末真题','txt',true);const notes=material('23','线代笔记','zip');const scan=material('24','线代扫描版','pdf');
+ await page.route('https://materials.example.com/**',route=>route.fulfill({contentType:'text/plain',body:'preview'}));
+ await page.route('**/api/**',async route=>{
+  const request=route.request();const path=new URL(request.url()).pathname;
+  if(path==='/api/health')return route.fulfill({json:{status:'ok'}});
+  if(path==='/api/session')return route.fulfill({json:{mode:'old-site',user:{id:user,name:'测试同学'},oldSite:{status:'ready'},initialContext:{},modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-05',limit:100000,used:0}}});
+  if(path==='/api/old-site/quota')return route.fulfill({json:quota});
+  if(path==='/api/old-site/materials')return route.fulfill({json:{items:[linear,exam,notes,scan],total:4,page:1,pageSize:20,hasMore:false}});
+  const detail=[linear,exam,notes,scan].find(m=>path===`/api/old-site/materials/${m.id}`);if(detail)return route.fulfill({json:detail});
+  const access=path.match(/^\/api\/old-site\/materials\/(\d+)\/access$/);
+  if(access){accessed.push(access[1]);const charged=access[1]==='21'?1:0;return route.fulfill({json:{readId:`read-${access[1]}`,charged,replayed:false,reused:false,expires:'2026-11-08T00:00:00Z',quota:{...quota,used:1,remaining:9}}});}
+  if(path.endsWith('/content'))return route.fulfill({contentType:'text/plain',body:`矩阵的秩与线性方程组。资料 ${path}`});
+  return route.fulfill({status:404});
+ });
+ await page.goto('/');
+ await page.getByRole('button',{name:'添加',exact:true}).click();await page.getByRole('button',{name:'搜索课程资料',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'课程资料'});
+ await dialog.getByRole('button',{name:/线性代数讲义/}).click();
+ await expect(dialog.locator('iframe[title="预览：线性代数讲义"]')).toHaveAttribute('src','https://materials.example.com/api/materials/21/preview');
+ await expect(dialog.locator('iframe[title="预览：线性代数讲义"]')).toHaveAttribute('sandbox','');await expect(dialog).toContainText('课程资料 · MD');expect(accessed).toHaveLength(0);
+ await dialog.getByRole('button',{name:'＋ 选择其他资料'}).click();
+ const basket=dialog.getByRole('region',{name:'待读清单'});await expect(basket).toContainText('线性代数讲义');await expect(basket).toContainText('最多扣 1 次下载额度');
+ await dialog.getByRole('button',{name:/线代笔记/}).click();await expect(dialog).toContainText('该格式暂不支持在线预览');await dialog.getByRole('button',{name:'← 返回搜索'}).click();
+ await dialog.getByRole('button',{name:/线代扫描版/}).click();const pdf=dialog.locator('iframe[title="预览：线代扫描版"]');await expect(pdf).toHaveAttribute('src','https://materials.example.com/api/materials/24/preview');await expect(pdf).not.toHaveAttribute('sandbox',/.*/);
+ await dialog.getByRole('button',{name:'＋ 选择其他资料'}).click();await expect(basket).toContainText('待读清单 · 2 份文件');await dialog.getByRole('button',{name:'移出：线代扫描版'}).click();await expect(basket).not.toContainText('线代扫描版');
+ await dialog.getByRole('button',{name:/线代期末真题/}).click();await expect(dialog.locator('iframe[title="预览：线代期末真题"]')).toHaveAttribute('sandbox','');
+ await expect(dialog).toContainText('待读清单里还有 1 项资料');
+ await dialog.getByRole('button',{name:'确认读取全部 2 份文件'}).click();await expect(dialog).toHaveCount(0);
+ expect(accessed.sort()).toEqual(['21','22']);expect(accessed).not.toContain('24');
+ await page.locator('.materials-panel summary').click();
+ await expect(page.getByRole('button',{name:'查看文本：线性代数讲义',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'查看文本：线代期末真题',exact:true})).toBeVisible();
+});
+
+test('a failed file stays on the reading list with a summary while the others import', async ({ page }) => {
+ const user='arxiv-material-fixture';const quota={total:10,used:0,remaining:10,cycleStart:'2026-11-01T00:00:00Z',cycleEnd:'2026-11-08T00:00:00Z'};
+ const material=(id:string,title:string,format:string)=>({id,kind:'material',title,courseName:'线性代数',format,size:2048,url:`https://materials.example.com/material/${id}`,availability:'available',alreadyDownloaded:false});
+ const good=material('31','线代讲义','txt');const broken=material('32','损坏的讲义','pdf');
+ await page.route('https://materials.example.com/**',route=>route.fulfill({contentType:'text/plain',body:'preview'}));
+ await page.route('**/api/**',async route=>{
+  const path=new URL(route.request().url()).pathname;
+  if(path==='/api/health')return route.fulfill({json:{status:'ok'}});
+  if(path==='/api/session')return route.fulfill({json:{mode:'old-site',user:{id:user,name:'测试同学'},oldSite:{status:'ready'},initialContext:{},modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-05',limit:100000,used:0}}});
+  if(path==='/api/old-site/quota')return route.fulfill({json:quota});
+  if(path==='/api/old-site/materials')return route.fulfill({json:{items:[good,broken],total:2,page:1,pageSize:20,hasMore:false}});
+  const detail=[good,broken].find(m=>path===`/api/old-site/materials/${m.id}`);if(detail)return route.fulfill({json:detail});
+  if(path.endsWith('/access'))return route.fulfill({json:{readId:'read',charged:1,replayed:false,reused:false,expires:'2026-11-08T00:00:00Z',quota:{...quota,used:2,remaining:8}}});
+  if(path.endsWith('/content'))return route.fulfill({contentType:'text/plain',body:'特征值与特征向量。'});
+  return route.fulfill({status:404});
+ });
+ await page.goto('/');await page.getByRole('button',{name:'添加',exact:true}).click();await page.getByRole('button',{name:'搜索课程资料',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'课程资料'});
+ await dialog.getByRole('button',{name:/线代讲义/}).click();await dialog.getByRole('button',{name:'＋ 选择其他资料'}).click();
+ await dialog.getByRole('button',{name:/损坏的讲义/}).click();await dialog.getByRole('button',{name:'＋ 选择其他资料'}).click();
+ const basket=dialog.getByRole('region',{name:'待读清单'});await basket.getByRole('button',{name:'确认读取 2 份文件'}).click();
+ await expect(dialog.getByRole('alert')).toContainText('已导入 1 份。此次确认共扣除 2 次下载额度');await expect(dialog.getByRole('alert')).toContainText('损坏的讲义.pdf');
+ await expect(basket).toContainText('损坏的讲义');await expect(basket).not.toContainText('线代讲义');
+});

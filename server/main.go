@@ -147,6 +147,18 @@ func (s *appServer) session(c *gin.Context) {
 	}
 	c.JSON(200, response)
 }
+
+// The old site's public preview pages are framed directly; Office formats go
+// through Microsoft's viewer, which fetches the old site's public URL itself.
+func contentSecurityPolicy(oldSite string) string {
+	frames, images := "'self'", "'self' data:"
+	if oldSite != "" {
+		frames += " " + oldSite + " https://view.officeapps.live.com"
+		images += " " + oldSite
+	}
+	return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src " + images + "; font-src 'self' data:; connect-src 'self'; frame-src " + frames + "; frame-ancestors 'none'"
+}
+
 func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	s := &appServer{cfg: cfg, store: db, client: &http.Client{Timeout: cfg.timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: "https://api.deepseek.com/chat/completions", slots: make(chan struct{}, 2)}
 	gin.SetMode(gin.ReleaseMode)
@@ -157,10 +169,11 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	}
 	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
 	r.Use(gin.Recovery())
+	csp := contentSecurityPolicy(cfg.oldSite.issuer)
 	r.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Referrer-Policy", "no-referrer")
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+		c.Header("Content-Security-Policy", csp)
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			c.Header("Cache-Control", "no-store")
 		}
