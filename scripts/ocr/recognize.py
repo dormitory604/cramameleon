@@ -105,6 +105,7 @@ class FormulaOCR:
 
 def main():
     root, pdf_path, pages_json = sys.argv[1:4]
+    stream = "--stream" in sys.argv[4:]
     pages = json.loads(pages_json)
     if not isinstance(pages, list) or len(pages) > 16 or any(type(p) is not int or p < 1 for p in pages):
         raise ValueError('invalid OCR pages')
@@ -121,12 +122,15 @@ def main():
                 pix = p.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False, colorspace=pymupdf.csRGB)
                 rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
                 text = model.page(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), deadline)
-                results.append({'page': page, 'text': text})
+                result = {'page': page, 'text': text}
+                results.append(result)
+                if stream:
+                    print(json.dumps({'pages': [result], 'warnings': []}, ensure_ascii=False), flush=True)
             except (TimeoutError, ValueError) as error:
                 warnings.append(f'第 {page} 页公式 OCR 未完成，保留原文本。')
                 if time.monotonic() >= deadline:
                     break
-    print(json.dumps({'pages': results, 'warnings': warnings}, ensure_ascii=False))
+    print(json.dumps({'pages': [] if stream else results, 'warnings': warnings}, ensure_ascii=False), flush=True)
 
 
 if __name__ == '__main__':

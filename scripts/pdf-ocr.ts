@@ -29,9 +29,15 @@ export async function ocrSparsePages(data: Uint8Array, sections: TextSection[],
    const models = process.env.APP_OCR_MODELS || join(runtime, 'models');
    const helper = resolve(import.meta.dirname, 'ocr/recognize.py');
    const pages = candidates.slice(0, 16).map(section => section.page);
-   const { stdout } = await run(python, [helper, models, pdf, JSON.stringify(pages)],
-    { timeout: 40_000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024 });
-   const output = JSON.parse(stdout) as { pages: { page: number; text: string }[]; warnings: string[] };
+   let stdout: string;
+   try {
+    ({ stdout } = await run(python, [helper, models, pdf, JSON.stringify(pages), '--stream'],
+     { timeout: 40_000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024 }));
+   } catch (error) {
+    stdout = String((error as { stdout?: string }).stdout || '');
+    warnings.push('自动公式 OCR 超时或中断，已保留完成识别的页面。');
+   }
+   const output = decodeOcrOutput(stdout);
    warnings.push(...output.warnings);
    const recognized = new Map(output.pages.map(item => [item.page, item.text]));
    availablePages = new Set(recognized.keys());
@@ -67,4 +73,16 @@ export async function ocrSparsePages(data: Uint8Array, sections: TextSection[],
  warnings.push(`已自动尝试 OCR ${attempted} 页，${recovered} 页补充了识别文本。OCR 可能误识别公式、上下标和选项，不能仅凭 OCR 字符匹配视为真题已核实。`);
  if (attempted < candidates.length) warnings.push(`另有 ${candidates.length - attempted} 页未完成 OCR（依赖不可用或达到 16 页/35 秒上限），请拆分文件或换资料。`);
  return warnings;
+}
+
+// Each complete line is a page checkpoint; a killed process may leave a partial final line.
+export function decodeOcrOutput(stdout: string): { pages: { page: number; text: string }[]; warnings: string[] } {
+ const result: { pages: { page: number; text: string }[]; warnings: string[] } = { pages: [], warnings: [] };
+ for (const line of stdout.split('\n').slice(0, -1)) {
+  if (!line.trim()) continue;
+  const event = JSON.parse(line) as typeof result;
+  result.pages.push(...event.pages);
+  result.warnings.push(...event.warnings);
+ }
+ return result;
 }
