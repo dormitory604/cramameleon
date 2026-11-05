@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-test('old-site mode shows a single existing-account entry and never posts a password', async ({ page }) => {
+for (const accessMode of ['public', 'beta'] as const) {
+test(`old-site ${accessMode} mode shows the existing-account entry and never posts a password`, async ({ page }) => {
   let passwordRequests = 0;
   await page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === '/api/auth/config') return route.fulfill({ json: { mode: 'old-site', oldSiteEntryUrl: 'https://materials.example.com/cramameleon' } });
+    if (path === '/api/auth/config') return route.fulfill({ json: { mode: 'old-site', oldSiteAccessMode: accessMode, oldSiteEntryUrl: 'https://materials.example.com/cramameleon' } });
     if (path === '/api/health') return route.fulfill({ json: { status: 'ok' } });
     if (path === '/api/internal/session') passwordRequests++;
     return route.fulfill({ status: 401, json: { error: { code: 'AUTH_REQUIRED' } } });
@@ -13,6 +14,7 @@ test('old-site mode shows a single existing-account entry and never posts a pass
   await expect(page.getByRole('link', { name: '从破壁计划进入' })).toHaveAttribute('href', 'https://materials.example.com/cramameleon');
   await expect(page.getByLabel('内部访问口令')).toHaveCount(0);
   await expect(page.getByLabel('输入消息')).toHaveCount(0);
+  await expect(page.getByText('当前为内测模式，仅开放给获邀账号。')).toHaveCount(accessMode === 'beta' ? 1 : 0);
   await expect(page.getByRole('alert')).toContainText('请从破壁计划重新进入');
   expect(new URL(page.url()).search).toBe('');
   expect(passwordRequests).toBe(0);
@@ -24,6 +26,7 @@ test('old-site mode shows a single existing-account entry and never posts a pass
     await page.screenshot({ path: `${process.env.ENTRY_SCREENSHOTS_DIR}/entry-mobile.png`, fullPage: true });
   }
 });
+}
 
 test('entry configuration failure keeps learning and password inputs closed', async ({ page }) => {
   await page.route('**/api/session', route => route.fulfill({ status: 401 }));

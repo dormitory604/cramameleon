@@ -8,7 +8,7 @@ import type { Quota, ReadAccess, RemoteItem, RemotePage, RemoteResource } from '
 type Props = { session: AppSession; documents: Document[]; initial?: AppSession['initialContext']; onClose: () => void; onImport: (docs: Document[]) => void; onBusy: (busy: boolean) => void };
 const plural = (kind: 'material' | 'package') => kind === 'material' ? 'materials' : 'packages';
 const bytes = (size: number) => size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : `${Math.ceil(size / 1024)} KB`;
-const authCodes = ['AUTH_REQUIRED', 'MATERIAL_AUTH_EXPIRED', 'SESSION_CHANGED'];
+const authCodes = ['AUTH_REQUIRED', 'MATERIAL_AUTH_EXPIRED', 'SESSION_CHANGED', 'ENTRY_NOT_ALLOWED'];
 // One resource the user has decided to read: a single material, or chosen files of one package.
 type Choice = { resource: RemoteResource; items: RemoteItem[] };
 const choiceKey = (resource: Pick<RemoteResource, 'kind' | 'id'>) => `${resource.kind}:${resource.id}`;

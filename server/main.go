@@ -140,7 +140,7 @@ func (s *appServer) session(c *gin.Context) {
 	user, name := c.GetString("userID"), c.GetString("userName")
 	response := gin.H{"mode": s.mode(), "user": gin.H{"id": user, "name": name}, "modelReady": s.modelReady(), "model": s.cfg.model, "limits": gin.H{"maxToolCalls": 6, "timeoutSeconds": 120, "maxOutputTokens": s.cfg.maxOutput}, "budget": gin.H{"day": budgetDay(time.Now()), "limit": s.cfg.dailyBudget, "used": n}}
 	if s.mode() == "old-site" {
-		response["oldSite"] = gin.H{"status": c.GetString("materialAuthStatus")}
+		response["oldSite"] = gin.H{"status": c.GetString("materialAuthStatus"), "accessMode": s.cfg.oldSite.mode()}
 		if context, ok := c.Get("initialContext"); ok {
 			response["initialContext"] = context
 		}
@@ -195,10 +195,18 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 		c.Next()
 	})
 	r.GET("/api/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok", "mode": s.mode(), "contractVersion": contractVersion, "modelReady": s.modelReady(), "oldSite": s.mode() == "old-site", "database": true})
+		response := gin.H{"status": "ok", "mode": s.mode(), "contractVersion": contractVersion, "modelReady": s.modelReady(), "oldSite": s.mode() == "old-site", "database": true}
+		if s.mode() == "old-site" {
+			response["oldSiteAccessMode"] = s.cfg.oldSite.mode()
+		}
+		c.JSON(200, response)
 	})
 	r.GET("/api/auth/config", func(c *gin.Context) {
-		c.JSON(200, gin.H{"mode": s.mode(), "oldSiteEntryUrl": cfg.oldSite.entryURL})
+		response := gin.H{"mode": s.mode(), "oldSiteEntryUrl": cfg.oldSite.entryURL}
+		if s.mode() == "old-site" {
+			response["oldSiteAccessMode"] = s.cfg.oldSite.mode()
+		}
+		c.JSON(200, response)
 	})
 	if s.mode() == "old-site" {
 		r.GET("/api/auth/old-site/start", s.startOldSiteAuth)

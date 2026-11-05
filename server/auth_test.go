@@ -67,7 +67,7 @@ func oldAuth(t *testing.T) *authFixture {
 	}
 	t.Cleanup(func() { db.db.Close() })
 	cfg := config{mode: "old-site", staticDir: t.TempDir(), model: "deepseek-flash", userID: "internal-developer", dailyBudget: 100000, maxInput: 64000, maxOutput: 512, timeout: time.Second,
-		oldSite: oldSiteConfig{publicURL: "http://127.0.0.1:19999", issuer: f.old.URL, entryURL: f.old.URL + "/cramameleon", authorizeURL: f.old.URL + "/authorize", tokenURL: f.old.URL + "/token", revokeURL: f.old.URL + "/revoke", clientID: "cramameleon", clientSecret: strings.Repeat("s", 32), key: []byte(strings.Repeat("k", 32))}}
+		oldSite: oldSiteConfig{publicURL: "http://127.0.0.1:19999", issuer: f.old.URL, entryURL: f.old.URL + "/cramameleon", authorizeURL: f.old.URL + "/authorize", tokenURL: f.old.URL + "/token", revokeURL: f.old.URL + "/revoke", clientID: "cramameleon", clientSecret: strings.Repeat("s", 32), key: []byte(strings.Repeat("k", 32)), allowed: map[string]bool{"42": true, "43": true}}}
 	server, router := newServer(cfg, db)
 	f.s = server
 	f.app = httptest.NewServer(router)
@@ -226,15 +226,23 @@ func TestOldSiteModeRejectsInternalLoginAndLegacySessions(t *testing.T) {
 	}
 }
 
-func TestOldSiteAccountExpiryAndLogout(t *testing.T) {
+func TestOldSiteAllowlistExpiryAndLogout(t *testing.T) {
 	f := oldAuth(t)
 	f.mu.Lock()
 	f.subject = "99"
 	f.mu.Unlock()
 	r := f.callback(t, f.start(t, ""))
-	if r.Header.Get("Location") != f.s.cfg.oldSite.publicURL+"/" {
+	if !strings.Contains(r.Header.Get("Location"), "ENTRY_NOT_ALLOWED") {
 		t.Fatal(r.Header)
 	}
+	f.mu.Lock()
+	n := f.revocations
+	f.subject = "42"
+	f.mu.Unlock()
+	if n != 1 {
+		t.Fatal("unapproved upstream grant was not revoked")
+	}
+	f.callback(t, f.start(t, ""))
 	f.s.store.db.Exec("UPDATE entry_sessions SET credential_expires=0")
 	status, v := f.session(t)
 	if status != 200 || v["oldSite"].(map[string]any)["status"] != "expired" {
@@ -278,17 +286,90 @@ func TestOldSiteConfigFailsClosed(t *testing.T) {
 	t.Setenv("OLD_SITE_CLIENT_ID", "cramameleon")
 	t.Setenv("OLD_SITE_CLIENT_SECRET", strings.Repeat("s", 32))
 	t.Setenv("APP_CREDENTIAL_KEY", strings.Repeat("ab", 32))
+	t.Setenv("APP_ALLOWED_OLD_USER_IDS", "42,43")
+	t.Setenv("APP_OLD_SITE_ACCESS_MODE", "")
 	t.Setenv("APP_ACCESS_TOKEN", "")
-	if _, e := loadConfig(); e != nil {
+	if cfg, e := loadConfig(); e != nil || cfg.oldSite.mode() != oldSiteAccessBeta {
 		t.Fatal(e)
 	}
-	for _, item := range []struct{ key, value string }{{"APP_CREDENTIAL_KEY", "short"}, {"OLD_SITE_URL", "http://old.example.com"}, {"APP_PUBLIC_URL", "https://learn.example.com/other"}, {"OLD_SITE_URL", "https://untrusted@old.example.com"}} {
+	for _, item := range []struct{ key, value string }{{"APP_ALLOWED_OLD_USER_IDS", ""}, {"APP_ALLOWED_OLD_USER_IDS", "*"}, {"APP_CREDENTIAL_KEY", "short"}, {"OLD_SITE_URL", "http://old.example.com"}, {"APP_PUBLIC_URL", "https://learn.example.com/other"}, {"OLD_SITE_URL", "https://untrusted@old.example.com"}} {
 		t.Run(item.key+item.value, func(t *testing.T) {
 			t.Setenv(item.key, item.value)
 			if _, e := loadConfig(); e == nil {
 				t.Fatal("accepted unsafe configuration")
 			}
 		})
+	}
+	t.Run("public keeps optional allowlist validated", func(t *testing.T) {
+		t.Setenv("APP_OLD_SITE_ACCESS_MODE", "public")
+		cfg, e := loadConfig()
+		if e != nil || !cfg.oldSite.allowed["42"] || !cfg.oldSite.allows("99") {
+			t.Fatal("public mode lost the retained list or denied a valid identity", e)
+		}
+		t.Setenv("APP_ALLOWED_OLD_USER_IDS", "")
+		if _, e = loadConfig(); e != nil {
+			t.Fatal("public mode requires an allowlist", e)
+		}
+		t.Setenv("APP_ALLOWED_OLD_USER_IDS", "*")
+		if _, e = loadConfig(); e == nil {
+			t.Fatal("public mode accepted a malformed retained list")
+		}
+	})
+	t.Run("unknown access mode", func(t *testing.T) {
+		t.Setenv("APP_OLD_SITE_ACCESS_MODE", "open")
+		if _, e := loadConfig(); e == nil {
+			t.Fatal("accepted unknown access mode")
+		}
+	})
+}
+
+func TestOldSitePublicAccessAndBetaSwitch(t *testing.T) {
+	f := oldAuth(t)
+	f.s.cfg.oldSite.accessMode = oldSiteAccessPublic
+	f.mu.Lock()
+	f.subject = "99" // Not in the retained beta list.
+	f.mu.Unlock()
+	if status, _ := f.session(t); status != 401 {
+		t.Fatal("public mode bypassed old-site authorization", status)
+	}
+	r := f.callback(t, f.start(t, ""))
+	if r.StatusCode != 303 || strings.Contains(r.Header.Get("Location"), "entryError=") {
+		t.Fatal("public mode rejected a normally authorized old-site user", r.Header)
+	}
+	for _, mode := range []string{oldSiteAccessPublic, oldSiteAccessBeta, oldSiteAccessPublic} {
+		f.s.cfg.oldSite.accessMode = mode
+		status, v := f.session(t)
+		if mode == oldSiteAccessBeta {
+			if status != 403 || v["error"].(map[string]any)["code"] != "ENTRY_NOT_ALLOWED" {
+				t.Fatal("switching to beta did not restrict the existing session", status, v)
+			}
+		} else if status != 200 || v["oldSite"].(map[string]any)["accessMode"] != mode {
+			t.Fatal("public session unavailable", status, v)
+		}
+		for _, path := range []string{"/api/health", "/api/auth/config"} {
+			r, e := f.client.Get(f.app.URL + path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			var metadata map[string]any
+			e = json.NewDecoder(r.Body).Decode(&metadata)
+			r.Body.Close()
+			if e != nil || r.StatusCode != 200 || metadata["oldSiteAccessMode"] != mode {
+				t.Fatal("incorrect access mode metadata", path, metadata, e)
+			}
+			if _, leaked := metadata["allowed"]; leaked {
+				t.Fatal("allowlist exposed in entry metadata")
+			}
+		}
+	}
+	if len(f.s.cfg.oldSite.allowed) != 2 || !f.s.cfg.oldSite.allowed["42"] || f.s.cfg.oldSite.allowed["99"] {
+		t.Fatal("switching modes changed the beta list")
+	}
+	if _, e := f.s.store.db.Exec("UPDATE app_users SET issuer='https://untrusted.example'"); e != nil {
+		t.Fatal(e)
+	}
+	if status, _ := f.session(t); status != 401 {
+		t.Fatal("public mode accepted an untrusted identity issuer", status)
 	}
 }
 

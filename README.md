@@ -84,14 +84,18 @@ npm run dev
 | APP_PUBLIC_URL、OLD_SITE_URL | 新站公网 origin、固定旧站地址；old-site 模式必填 |
 | OLD_SITE_CLIENT_ID、OLD_SITE_CLIENT_SECRET | 两个后端专用集成身份与秘密 |
 | APP_CREDENTIAL_KEY | 旧站凭据加密密钥，32 字节，配置为 64 位十六进制 |
+| APP_OLD_SITE_ACCESS_MODE | public：所有正常授权的旧站用户；beta：仅内测名单。未配置时默认 beta |
+| APP_ALLOWED_OLD_USER_IDS | 内测名单中的旧站数字用户 ID，逗号分隔；beta 时不能为空，public 时保留供切回使用 |
 | APP_ACCESS_TOKEN、APP_DEVELOPER_ID | 内部模式口令与本机记录对应身份 |
 | DEEPSEEK_API_KEY、DEEPSEEK_MODEL | 服务端模型密钥和唯一允许模型名，模型默认 deepseek-flash |
 | APP_DAILY_TOKEN_BUDGET | 全局每日输入、输出 token 合计上限；代码默认 1,000,000，部署模板可覆盖 |
 | APP_MAX_OUTPUT_TOKENS、APP_MAX_INPUT_BYTES | 单次模型输出 token 上限、请求体字节上限，默认 2048、64000 |
 
-旧站流程使用单次授权码、浏览器绑定 state、S256 PKCE 和固定回调，服务端兑换后建立 8 小时应用会话。所有破壁计划账号均可使用。资料凭据失效与应用会话失效分别处理；旧站暂不可用时，有效应用会话仍可使用本地与缓存资料。
+旧站流程使用单次授权码、浏览器绑定 state、S256 PKCE 和固定回调，服务端兑换后建立 8 小时应用会话。public 允许正常授权的旧站用户进入，beta 按每次请求重新核对名单；两种模式都要求有效的旧站账号授权。资料凭据失效与应用会话失效分别处理；旧站暂不可用时，有效应用会话仍可使用本地与缓存资料。
 
-密钥和部署环境文件由服务器私有配置管理，修改后重启进程。不要把邮箱、昵称或前端参数当作可信身份，也不要设置 VITE 模型密钥。详细接入与下载规则见 [旧站身份与课程资料接入](docs/旧站身份与资料接入-2026-11-05.md)。
+名单、密钥和部署环境文件由服务器私有配置管理，修改后重启进程。不要把邮箱、昵称或前端参数当作可信身份，也不要设置 VITE 模型密钥。详细接入与下载规则见 [旧站身份与课程资料接入](docs/旧站身份与资料接入-2026-11-05.md)。
+
+切换开放范围时，在服务器私有 .env.old-site 中设置 APP_OLD_SITE_ACCESS_MODE=public 或 beta，然后执行 pm2 restart cramameleon。保留原 APP_ALLOWED_OLD_USER_IDS；切回 beta 后名单外用户的已有会话也会受限。GET /api/health 和 /api/auth/config 的 oldSiteAccessMode 可确认已加载的模式，不返回名单。仅修改此配置无需重新构建。
 
 ## 资料阅读与引用
 
@@ -140,7 +144,7 @@ npm run dev
 | POST /api/old-site/materials/:id/access、packages/:id/access | 资料读取授权与幂等回执 |
 | GET /api/old-site/materials/:id/content、packages/:id/items/:itemId/content | 按读取授权取得文件字节 |
 
-业务接口要求有效应用会话；旧站资料请求绑定当前用户，后端只转发固定旧站和白名单路径。常见错误包括 AUTH_REQUIRED、MATERIAL_AUTH_EXPIRED、QUOTA_EXCEEDED、MODEL_NOT_CONFIGURED、BUDGET_EXCEEDED、TOTAL_BUDGET_EXCEEDED、CONCURRENCY_LIMIT、MODEL_STREAM_INTERRUPTED、MODEL_OUTPUT_LIMIT 和 STORAGE_FAILED。
+业务接口要求有效应用会话；旧站资料请求绑定当前用户，后端只转发固定旧站和白名单路径。常见错误包括 AUTH_REQUIRED、ENTRY_NOT_ALLOWED、MATERIAL_AUTH_EXPIRED、QUOTA_EXCEEDED、MODEL_NOT_CONFIGURED、BUDGET_EXCEEDED、TOTAL_BUDGET_EXCEEDED、CONCURRENCY_LIMIT、MODEL_STREAM_INTERRUPTED、MODEL_OUTPUT_LIMIT 和 STORAGE_FAILED。
 
 ## 验证
 
