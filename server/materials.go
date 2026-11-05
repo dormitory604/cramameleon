@@ -21,7 +21,7 @@ var materialRoute = regexp.MustCompile(`^/(quota|materials|packages|materials/[1
 // origin, attaches the encrypted session credential, and rejects redirects.
 func (s *appServer) materials(c *gin.Context) {
 	if s.mode() != "old-site" {
-		fail(c, 404, "NOT_IMPLEMENTED", "请从破壁计划进入后使用课程资料")
+		fail(c, 404, "NOT_FOUND", "请从破壁计划进入后使用课程资料")
 		return
 	}
 	if c.GetHeader("X-Cram-User") != c.GetString("userID") {
@@ -31,7 +31,7 @@ func (s *appServer) materials(c *gin.Context) {
 	path := c.Param("path")
 	access := strings.HasSuffix(path, "/access")
 	if !materialRoute.MatchString(path) || (access && c.Request.Method != http.MethodPost) || (!access && c.Request.Method != http.MethodGet) {
-		fail(c, 404, "NOT_IMPLEMENTED", "资料接口不存在")
+		fail(c, 404, "NOT_FOUND", "资料接口不存在")
 		return
 	}
 	var encrypted []byte

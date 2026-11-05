@@ -1,13 +1,23 @@
 import { test, expect } from '@playwright/test';
+import { pdf } from '../materialFixtures.ts';
 
 test('browse is free; explicit package import retries one receipt, parses selected files and reuses user cache', async ({ page }) => {
  const user='arxiv-material-fixture';const requestIds:string[]=[];let contents=0;
+ const modelRequests:any[]=[];
  const resource={id:'12',kind:'package',title:'概率论课程包',courseName:'概率论',format:'zip',size:100,url:'https://materials.example.com/package/12',availability:'available',alreadyDownloaded:false};
  const quota={total:3,used:0,remaining:3,cycleStart:'2026-11-01T00:00:00Z',cycleEnd:'2026-11-08T00:00:00Z'};
  await page.route('**/api/**',async route=>{
   const request=route.request();const path=new URL(request.url()).pathname;
   if(path==='/api/health')return route.fulfill({json:{status:'ok'}});
   if(path==='/api/session')return route.fulfill({json:{mode:'old-site',user:{id:user,name:'测试同学'},oldSite:{status:'ready'},initialContext:{packageId:'12'},modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-05',limit:100000,used:0}}});
+  if(path==='/api/model'){
+   const body=request.postDataJSON();modelRequests.push(body);
+   const last=body.messages.at(-1);
+   const step=last.role==='user'?{type:'tool_call',id:'read-selected',name:'search_context',arguments:{query:'条件概率'}}:
+    {type:'text_delta',delta:'已从旧站资料读到：'+JSON.parse(last.content).chunks[0].text};
+   const events=[{type:'start',requestId:body.requestId},step,{type:'usage',usage:{input:1,output:1,total:2}},{type:'finish',stopReason:step.type==='tool_call'?'toolUse':'stop'}];
+   return route.fulfill({contentType:'text/event-stream',body:events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join('')});
+  }
   if(path.startsWith('/api/old-site/'))expect(request.headers()['x-cram-user']).toBe(user);
   if(path==='/api/old-site/quota')return route.fulfill({json:quota});
   if(path==='/api/old-site/packages')return route.fulfill({json:{items:[resource],total:1,page:1,pageSize:20,hasMore:false}});
@@ -36,6 +46,74 @@ test('browse is free; explicit package import retries one receipt, parses select
  await dialog.getByLabel('资料类别').selectOption('package');
  await dialog.getByRole('button',{name:/概率论课程包/}).click();await dialog.getByRole('checkbox',{name:/lecture.txt/}).check();await dialog.getByRole('button',{name:'确认读取 1 份文件'}).click();await expect(dialog).toHaveCount(0);
  expect(requestIds).toHaveLength(2);expect(contents).toBe(2);
+ await page.getByLabel('输入消息').fill('按已选的旧站资料讲解条件概率');
+ await page.getByRole('button',{name:'发送消息',exact:true}).click();
+ await expect(page.getByText(/已从旧站资料读到：条件概率/)).toBeVisible();
+ expect(modelRequests).toHaveLength(2);
+ expect(modelRequests[0].messages[0].content).toContain('old-site:package:12:1');
+ expect(modelRequests[0].tools.some((tool:any)=>tool.function.name==='search_context')).toBe(true);
+ expect(modelRequests[1].messages.at(-1).content).toContain('P(A|B)');
+ expect(modelRequests[0].messages[0].content).not.toContain('旧站授权尚未接入');
+});
+
+test('an imported old-site PDF can be read from its first question, cited and reused after reload despite earlier missing-material history', async ({ page }) => {
+ const user='old-site-pdf-reader',question='1. For disjoint events add their probabilities.';
+ const resource={id:'5232',kind:'material',title:'概率论与数理统计 2024小测题',courseName:'概率论',format:'pdf',size:1000,url:'https://materials.example.com/material/5232',availability:'available',alreadyDownloaded:false};
+ const quota={total:3,used:0,remaining:3,cycleStart:'2026-11-01T00:00:00Z',cycleEnd:'2026-11-08T00:00:00Z'};
+ const requests:any[]=[];let accesses=0,contents=0,source:any;
+ await page.route('**/api/**',async route=>{
+  const request=route.request(),path=new URL(request.url()).pathname;
+  if(path==='/api/session')return route.fulfill({json:{mode:'old-site',user:{id:user,name:'测试同学'},oldSite:{status:'ready'},modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-05',limit:100000,used:0}}});
+  if(path==='/api/health')return route.fulfill({json:{status:'ok'}});
+  if(path.startsWith('/api/old-site/'))expect(request.headers()['x-cram-user']).toBe(user);
+  if(path==='/api/old-site/quota')return route.fulfill({json:quota});
+  if(path==='/api/old-site/materials')return route.fulfill({json:{items:[resource],total:1,page:1,pageSize:20,hasMore:false}});
+  if(path==='/api/old-site/materials/5232')return route.fulfill({json:resource});
+  if(path.endsWith('/access')){accesses++;return route.fulfill({json:{readId:'pdf-read',charged:1,replayed:false,reused:false,expires:'2026-11-08T00:00:00Z',quota:{...quota,used:1,remaining:2}}});}
+  if(path.endsWith('/content')){contents++;return route.fulfill({contentType:'application/pdf',body:Buffer.from(pdf(false,false,question))});}
+  if(path==='/api/model'){
+   const body=request.postDataJSON();requests.push(body);
+   const last=body.messages.at(-1);let step:any;
+   if(!body.tools.some((tool:any)=>tool.function.name==='read_context'))step={type:'text_delta',delta:'当前没有已选资料。'};
+   else if(last.role==='user')step={type:'tool_call',id:'read-first',name:'read_context',arguments:{documentId:'old-site:material:5232'}};
+   else if(last.tool_call_id==='read-first'){
+    const result=JSON.parse(last.content);source=result.chunks[0];
+    expect(source.text).toContain(question);expect(source.page).toBe(1);
+    step={type:'tool_call',id:'cite-first',name:'cite_sources',arguments:{refs:[{documentId:source.documentId,chunkId:source.chunkId}]}};
+   }else step={type:'text_delta',delta:'已读原文：'+source.text};
+   const events=[{type:'start',requestId:body.requestId},step,{type:'usage',usage:{input:1,output:1,total:2}},{type:'finish',stopReason:step.type==='tool_call'?'toolUse':'stop'}];
+   return route.fulfill({contentType:'text/event-stream',body:events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join('')});
+  }
+  return route.fulfill({status:404});
+ });
+ const send=async(text:string)=>{await page.getByLabel('输入消息').fill(text);await page.getByRole('button',{name:'发送消息',exact:true}).click();await expect(page.getByRole('button',{name:'停止',exact:true})).toHaveCount(0);};
+ await page.goto('/');await send('帮我查一下概率论的课程资料');
+ await expect(page.getByText('当前没有已选资料。',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'添加',exact:true}).click();await page.getByRole('button',{name:'搜索课程资料',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'课程资料'});
+ await dialog.getByRole('button',{name:new RegExp(resource.title)}).click();
+ expect(accesses).toBe(0);expect(contents).toBe(0);
+ await dialog.getByRole('button',{name:'确认读取并导入',exact:true}).click();
+ await expect(dialog).toHaveCount(0);await expect(page.locator('.materials-panel summary')).toContainText('已选 1/1');
+ await send('给我讲解里面的第一题的知识吧');
+ await expect(page.getByText('已读原文：'+question,{exact:true})).toBeVisible();
+ expect(requests).toHaveLength(4);
+ expect(requests[1].messages[0].content).toContain('"chunkCount":2');
+ expect(requests[1].messages[0].content).toContain('"origin":"old-site"');
+ expect(requests[1].messages[0].content).not.toContain('旧站授权尚未接入');
+ await page.getByRole('button',{name:'▧ '+resource.title,exact:true}).click();
+ await expect(page.getByRole('dialog')).toContainText(question);await expect(page.getByRole('dialog')).toContainText('第 1 页');
+ await page.getByRole('button',{name:'关闭来源',exact:true}).click();
+ await expect(page.getByRole('status',{name:'本机存储状态'})).toHaveText('已保存到当前浏览器');
+ await page.reload();await send('再按这份资料讲第一题');
+ await expect(page.locator('.msg.assistant').last()).toContainText(question);
+ expect(accesses).toBe(1);expect(contents).toBe(1);
+ await page.locator('.materials-panel summary').click();
+ await page.getByLabel('使用资料 '+resource.title,{exact:true}).uncheck();
+ await send('再读一遍第一题');
+ expect(requests.at(-1).tools.some((tool:any)=>tool.function.name==='read_context')).toBe(false);
+ expect(JSON.stringify(requests.at(-1))).not.toContain(question);
+ expect(accesses).toBe(1);expect(contents).toBe(1);
 });
 
 test('material detail previews the old-site file for free and a reading list imports several materials at once', async ({ page }) => {

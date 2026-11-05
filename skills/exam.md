@@ -11,7 +11,7 @@
 ## 步骤
 
 1. 确定范围与要求。优先用当前请求中的主题、章节、难度和题目来源要求，缺项再看当前学习位置及有效历史。范围足够就马上准备题目；连学科都不明确时，只问一个范围问题，并以 phase=scope 记录当前等待内容。用户要求一套题时，说明将逐题进行，本轮仍只交付一道；不承诺自动计时、总分榜或后台考试。
-2. 读取必要依据。相关资料可用时用 search_context 查本题需要的定义、条件或原题，充分后停止检索。用户指定依据资料、改编或真题时，先核对证据，再决定来源类型，不能用常识补造原题。
+2. 读取必要依据。相关资料可用时用 search_context 查本题需要的定义、条件或原题，或用 read_context 阅读用户指定的第一题、开头等顺序位置，充分后停止读取。用户指定依据资料、改编或真题时，先核对证据，再决定来源类型，不能用常识补造原题。
 3. 确定一个考点。默认从能辨析或应用核心关系的题开始；用户明确要求难度时照做。有效历史有作答时，结合实际错误选择后续题目：漏掉概念联系就补关系，条件混淆就换情境辨析，应用出错就用更小步骤。答对可在范围内换一种应用；没有作答记录就不编造诊断。仅改数字、重复措辞或立刻重考刚揭晓答案的题，不算有意义的下一题。
 4. 一次完成题干、选项、唯一正确答案和各项解释。先独立核对事实、计算、前提与歧义，保证只有一个选项成立。默认四个选项；按题目需要或用户要求可用 2—6 个。每个干扰项对应一种具体误解，选项长度、措辞和详细程度相当，不通过推荐标记、排序或明显更完整的描述暗示答案。题干只放问题和必要条件，选项正文放入 options，不重复编号。
 5. 学习位置实际变化时，以 phase=practice 记录当前课程、章节和正在练习的考点，不写预计得分或未验证的掌握度。随后调用 present_quiz 展示题目；来源通过 sourceRefs 关联，成功后本轮不再调用工具，也不准备下一道题。
@@ -53,7 +53,7 @@ sourceRefs 只填真实的 documentId/chunkId，不手写来源页码、链接�
 前提：当前没有选中资料或既有题目；router 已读取 exam。
 
 工具：update_learning_state({"course":"概率论","chapter":"互斥事件","progress":"练习互斥事件的加法公式","phase":"practice"})
-工具：present_quiz({"question":"若事件 A、B 互斥，P(A)=0.2，P(B)=0.3，则 P(A∪B) 是多少？","options":[{"id":"A","text":"0.5","explanation":"互斥表示 A、B 不能同时发生，因此 P(A∩B)=0，并集概率为 0.2+0.3=0.5。"},{"id":"B","text":"0.06","explanation":"0.2×0.3=0.06 混淆了并集与交集。独立事件的交集概率才可直接用概率乘积计算；本题的互斥条件要求计算两者概率之和。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
+工具：present_quiz({"question":"若事件 $A$、$B$ 互斥，$P(A)=0.2$，$P(B)=0.3$，则 $P(A\\cup B)$ 是多少？","options":[{"id":"A","text":"$0.5$","explanation":"互斥表示 $A$、$B$ 不能同时发生，因此 $P(A\\cap B)=0$，并集概率为 $0.2+0.3=0.5$。"},{"id":"B","text":"$0.06$","explanation":"$0.2\\times0.3=0.06$ 混淆了并集与交集。独立事件的交集概率才可直接用概率乘积计算；本题的互斥条件要求计算两者概率之和。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
 文字：请选择一个选项，作答后可查看解释。
 终态：waiting。
 
@@ -68,6 +68,6 @@ sourceRefs 只填真实的 documentId/chunkId，不手写来源页码、链接�
 前提：继续使用本轮已知主题；此轮重新读取 exam，原来的二选一要求只针对前一题。
 
 工具：update_learning_state({"chapter":"互斥与独立","progress":"辨析正概率事件的互斥与独立","phase":"practice"})
-工具：present_quiz({"question":"已知 P(A)>0、P(B)>0，且 A、B 互斥，以下哪项成立？","options":[{"id":"A","text":"P(A∩B)=0，因此 A、B 不独立","explanation":"互斥给出 P(A∩B)=0，而正概率保证 P(A)P(B)>0，两者不相等，因而不独立。"},{"id":"B","text":"P(A∩B)=0，因此 A、B 必定独立","explanation":"独立要求 P(A∩B)=P(A)P(B)；本题概率均为正，零不等于正的乘积。"},{"id":"C","text":"P(A∪B)=0，因此 A、B 不独立","explanation":"互斥的是同时发生的交集；并集概率等于两个正概率之和，不能为零。"},{"id":"D","text":"P(A|B)=P(A)，因此 A、B 独立","explanation":"因为 B 的概率为正且交集为零，P(A|B)=0，而题设 P(A)>0，二者不相等。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
+工具：present_quiz({"question":"已知 $P(A)>0$、$P(B)>0$，且 $A$、$B$ 互斥，以下哪项成立？","options":[{"id":"A","text":"$P(A\\cap B)=0$，因此 $A$、$B$ 不独立","explanation":"互斥给出 $P(A\\cap B)=0$，而正概率保证 $P(A)P(B)>0$，两者不相等，因而不独立。"},{"id":"B","text":"$P(A\\cap B)=0$，因此 $A$、$B$ 必定独立","explanation":"独立要求 $P(A\\cap B)=P(A)P(B)$；本题概率均为正，零不等于正的乘积。"},{"id":"C","text":"$P(A\\cup B)=0$，因此 $A$、$B$ 不独立","explanation":"互斥的是同时发生的交集；并集概率等于两个正概率之和，不能为零。"},{"id":"D","text":"$P(A\\mid B)=P(A)$，因此 $A$、$B$ 独立","explanation":"因为 $B$ 的概率为正且交集为零，$P(A\\mid B)=0$，而题设 $P(A)>0$，二者不相等。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
 文字：请选择一个选项。
 终态：waiting。

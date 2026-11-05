@@ -1,5 +1,7 @@
 # Issue #9 学习记录验收
 
+> 历史验收记录：本文仅反映当时的实现、命令与验证结果，不代表当前功能或部署状态。现行说明见 [项目 README](../README.md) 和 [文档目录](README.md)。
+
 对应 [Issue #9](https://github.com/dormitory604/cramameleon/issues/9)，范围为 A 负责的本机学习记录与界面，复用真实 PiAgentAdapter、Worker 和浏览器 IndexedDB。未改动 Agent、公共契约或服务端；未调用付费模型。
 
 ## 交付与修复

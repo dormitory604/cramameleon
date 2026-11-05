@@ -4,12 +4,11 @@ export function actionText(action: AgentAction): string {
     case 'send': case 'retry': return action.text;
     case 'continue': return '请接着刚才的内容继续。';
     case 'next_question': return '请根据刚才的练习和我的作答，出下一题。';
-    case 'confirm_materials': return '我确认选择这些资料：' + action.ids.join('、');
   }
 }
 export const HISTORY_MAX_CHARS = 12000;
 export const HISTORY_MAX_MESSAGES = 30;
-// Complete pairs only; retries exclude the original prompt and incomplete answer.
+// Pairing and budget rules are shared with the quiz-aware history projection.
 export function buildHistory(messages: ChatMessage[], sessionId: string, retryUserId?: string, maxChars = HISTORY_MAX_CHARS): HistoryMessage[] {
   const current = messages.filter(m => m.conversationId === sessionId);
   const pairs: HistoryMessage[][] = [];
@@ -18,9 +17,8 @@ export function buildHistory(messages: ChatMessage[], sessionId: string, retryUs
     if (m.id === retryUserId) break;
     if (m.role === 'user') { user = m; continue; }
     if (!user || !['completed', 'waiting'].includes(m.status ?? '')) continue;
-    let text = m.text;
-    if (m.quiz) text += '\n题目记录：' + JSON.stringify(m.quiz) + '\n用户作答：' + (m.selectedOption ?? '尚未作答');
-    pairs.push([{ role: 'user', text: user.text }, { role: 'assistant', text }]);
+    // Quiz records are projected by buildLearningHistory before pairing.
+    pairs.push([{ role: 'user', text: user.text }, { role: 'assistant', text: m.text }]);
     user = undefined;
   }
   const result: HistoryMessage[] = [];

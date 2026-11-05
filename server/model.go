@@ -16,7 +16,7 @@ import (
 )
 
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,128}$`)
-var allowedTools = map[string]bool{"present_quiz": true, "read_skill": true, "update_learning_state": true, "search_context": true, "cite_sources": true}
+var allowedTools = map[string]bool{"present_quiz": true, "read_skill": true, "update_learning_state": true, "search_context": true, "read_context": true, "cite_sources": true}
 
 func validID(s string) bool { return idPattern.MatchString(s) }
 

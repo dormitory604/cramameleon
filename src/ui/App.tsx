@@ -4,10 +4,13 @@ import { MaterialComposer } from './Materials.tsx';
 import { SourceViewer } from './SourceViewer.tsx';
 import { Markdown, stripQuizRecords } from './Markdown.tsx';
 import { ThemeToggle } from './Theme.tsx';
+import { MessageTools } from './MessageTools.tsx';
+import { MessageEditor } from './MessageEditor.tsx';
 import { PiAgentAdapter } from '../agent/PiAgentAdapter.ts';
 import { buildLearningHistory } from '../session/learningContext.ts';
 import { useLocalRecords } from '../session/useLocalRecords.ts';
 import { LEGACY_CONVERSATION_ID } from '../session/appStore.ts';
+import { prepareMessageEdit } from '../session/messageEditing.ts';
 
 const LOGO = import.meta.env.BASE_URL + 'logo-192.png';
 
@@ -26,7 +29,7 @@ const recoveryErrors: Record<string, string> = {
   MODEL_NOT_CONFIGURED: '模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。',
 };
 
-// Select complete turns at A's submission boundary; visible records remain intact.
+// Select complete turns whose material scope is still available; visible records remain intact.
 function scopedMessages(messages: ChatMessage[], conversationId: string, selectedIds: string[], retryUserId?: string): ChatMessage[] {
   const selected = new Set(selectedIds);
   const current = messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId);
@@ -77,25 +80,25 @@ export function App() {
   const active = useRef<{ id: string; conversationId: string; controller: AbortController } | null>(null);
   const accessValid = useRef(false);
   const sessionGeneration = useRef(0);
-  // Records stay owned by the session user across an expiry (#8) and are
-  // replaced only when another user enters or the user exits (#9).
+  // Records stay owned by the session user across an expiry and are
+  // replaced only when another user enters or the user exits.
   const { messages, setMessages, states, setStates, materials, setMaterials, conversationId, setConversationId, loaded, storageStatus, storageFailed, readFailed, retryStorage, flush, preserveRecovery } = useLocalRecords(appSession?.user.id, () => {
     // Invalidate before abort: even a late terminal event belongs to the old turn.
     detachActiveTurn();
   });
   const [leaving, setLeaving] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; trigger: HTMLElement | null } | null>(null);
   const [exitRisk, setExitRisk] = useState(false);
   const [source, setSource] = useState<Source | null>(null);
-  const [copiedId, setCopiedId] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState('');
   const chat = useRef<HTMLElement>(null);
-  // Follow new output only while the learner is at the bottom; reading history pauses it (#10).
+  // Follow new output only while the learner is at the bottom; reading history pauses it.
   const following = useRef(true);
   const textarea = useRef<HTMLTextAreaElement>(null);
 
   const conversations = useMemo(() => {
-    const map = new Map<string, { id: string; title: string; updatedAt: number; running: boolean; count: number }>();
+    const map = new Map<string, { id: string; title: string; updatedAt: number; running: boolean; count: number; editArchive?: true }>();
     for (const id of Object.keys(states)) {
       map.set(id, { id, title: '', updatedAt: 0, running: false, count: 0 });
     }
@@ -108,10 +111,11 @@ export function App() {
       if (!entry.title && message.role === 'user') entry.title = message.text.slice(0, 40);
       entry.updatedAt = Math.max(entry.updatedAt, message.createdAt ?? 0);
       entry.running ||= message.status === 'running';
+      if (message.editArchive) entry.editArchive = true;
       entry.count += 1;
       map.set(id, entry);
     }
-    return [...map.values()].map(item => ({ ...item, title: item.title || '新对话' })).sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...map.values()].map(item => ({ ...item, title: (item.title || '新对话') + (item.editArchive ? ' · 编辑前版本' : '') })).sort((a, b) => b.updatedAt - a.updatedAt);
   }, [messages, materials, states]);
   const visibleConversations = authenticated ? conversations.filter(item => !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase())) : [];
   const current = authenticated ? messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId) : [];
@@ -122,9 +126,10 @@ export function App() {
   const nextQuestionAvailable = !!currentQuiz?.revealed && ['completed', 'waiting'].includes(currentQuiz.status ?? '')
     && ['completed', 'waiting'].includes(lastMessage?.status ?? '')
     && (lastMessage === currentQuiz || !['learning', 'scope'].includes(states[conversationId]?.phase ?? ''));
-  const canRun = authenticated && loaded && appSession?.modelReady && !busy && !importing && !leaving;
+  const canRun = authenticated && loaded && appSession?.modelReady && !busy && !importing && !leaving && !editing;
   const currentTitle = (authenticated && conversations.find(item => item.id === conversationId)?.title) || '新对话';
   const sourceDocument = source ? materials[conversationId]?.documents.find(d=>d.id===source.documentId) : undefined;
+  useEffect(() => { setEditing(null); }, [appSession?.user.id, conversationId, authenticated]);
 
   async function refreshHealth() {
     try { const response = await fetch('/api/health'); if (!response.ok) throw new Error(); setHealth(await response.json()); }
@@ -196,7 +201,7 @@ export function App() {
     channel.postMessage({type:'identity',userId});return()=>{channel.close();authChannel.current=null;};
   },[appSession?.user.id,authenticated]);
   useEffect(() => {
-    // A user change or exit resets transient UI; a same-user expiry keeps it (#8).
+    // A user change or exit resets transient UI; a same-user expiry keeps it.
     detachActiveTurn();
     setImporting(false); setInput(''); setSource(null); setQuery(''); setExitRisk(false);
   }, [appSession?.user.id]);
@@ -230,7 +235,7 @@ export function App() {
       accessValid.current = true;
       setAppSession(data); setAccessToken('');
       setAuthenticated(true);
-    } catch (error) { setNotice(error instanceof Error ? error.message : '模拟授权失败'); }
+    } catch (error) { setNotice(error instanceof Error ? error.message : '授权失败，请重试。'); }
     finally { setAuthBusy(false); }
   }
   async function logout(exitAnyway = false) {
@@ -253,25 +258,39 @@ export function App() {
   function updateMessage(id: string, change: (message: ChatMessage) => ChatMessage) {
     setMessages(previous => previous.map(message => message.id === id ? change(message) : message));
   }
-  async function run(text: string, retryMessage?: ChatMessage, action?: AgentAction) {
-    if (!text.trim() || !accessValid.current || !authenticated || importing || leaving || active.current || !loaded || !appSession?.modelReady) return;
+  async function run(text: string, retryMessage?: ChatMessage, action?: AgentAction, editMessage?: ChatMessage) {
+    if (!text.trim() || !accessValid.current || !authenticated || importing || leaving || active.current || !loaded || !appSession?.modelReady || editing && !editMessage) return;
+    let edit: ReturnType<typeof prepareMessageEdit> | undefined;
+    if (editMessage) {
+      try { edit = prepareMessageEdit(messages, conversationId, editMessage.id, text); }
+      catch (error) { setNotice(error instanceof Error ? error.message : '消息无法编辑'); return; }
+    }
     sessionGeneration.current++;
     const id = crypto.randomUUID();
     const controller = new AbortController();
     const now = Date.now();
-    const userMessageId = retryMessage?.replyTo ?? crypto.randomUUID();
+    const userMessageId = edit?.message.id ?? retryMessage?.replyTo ?? crypto.randomUUID();
     const documents = (materials[conversationId]?.documents ?? []).filter(d => materials[conversationId]?.selectedIds.includes(d.id));
     const selectedMaterialIds = documents.map(d => d.id);
-    // #6 selects material-compatible complete turns; #7 then projects quiz records within budget.
-    const history = buildLearningHistory(scopedMessages(messages, conversationId, selectedMaterialIds, retryMessage ? userMessageId : undefined), conversationId);
+    // Filter by material scope, then project quiz records within the history budget.
+    const history = buildLearningHistory(scopedMessages(edit?.prefix ?? messages, conversationId, selectedMaterialIds, retryMessage ? userMessageId : undefined), conversationId);
+    const initialState = edit ? edit.message.learningStateBefore ?? { preferences: '', progress: '' } : states[conversationId] ?? { preferences: '', progress: '' };
     let modelNotConfigured = false;
     following.current = true;
-    active.current = { id, conversationId, controller }; setBusy(true); setInput(''); setNotice('');
-    setMessages(previous => [...previous.filter(m => m.id !== retryMessage?.id).map(m => m.id === userMessageId ? { ...m, selectedMaterialIds } : m),
-      ...(!retryMessage ? [{ id: userMessageId, role: 'user' as const, text: text.trim(), conversationId, createdAt: now, selectedMaterialIds }] : []),
+    active.current = { id, conversationId, controller }; setBusy(true); if (!edit) setInput(''); setNotice(''); setEditing(null);
+    if (edit) {
+      const { archiveId } = edit;
+      setStates(previous => ({ ...previous, [archiveId]: previous[conversationId] ?? { preferences: '', progress: '' }, [conversationId]: initialState }));
+      setMaterials(previous => ({ ...previous, [archiveId]: previous[conversationId] ?? { documents: [], selectedIds: [] } }));
+      setSource(null);
+    }
+    setMessages(previous => [...(edit
+      ? [...previous.filter(m => (m.conversationId ?? LEGACY_CONVERSATION_ID) !== conversationId), ...edit.archived, ...edit.prefix]
+      : previous.filter(m => m.id !== retryMessage?.id).map(m => m.id === userMessageId ? { ...m, selectedMaterialIds } : m)),
+      ...(!retryMessage ? [{ ...(edit?.message ?? { id: userMessageId, role: 'user' as const, conversationId, createdAt: now }), text: text.trim(), selectedMaterialIds, learningStateBefore: initialState }] : []),
       { id, replyTo: userMessageId, role: 'assistant', text: '', status: 'running', logs: [], modelRequests: 0, toolCalls: 0, conversationId, createdAt: now + 1, selectedMaterialIds }]);
     try {
-      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents, state: states[conversationId] ?? { preferences: '', progress: '' }, signal: controller.signal })) {
+      for await (const event of new PiAgentAdapter(appSession).run({ sessionId: conversationId, turnId: id, action: retryMessage ? { type: 'retry', text, userMessageId } : action ?? { type: 'send', text }, history, documents, state: initialState, signal: controller.signal })) {
         if (active.current?.id !== id || event.turnId !== id || event.sessionId !== conversationId) continue;
         if (controller.signal.aborted && event.type !== 'done') continue;
         if (event.type === 'state_update') { setStates(previous => ({ ...previous, [conversationId]: event.state })); continue; }
@@ -310,14 +329,15 @@ export function App() {
     if (!running) return;
     updateMessage(running.id, message => ({ ...message, status: 'cancelled' }));
   }
-  async function copy(message: ChatMessage) {
-    try { await navigator.clipboard.writeText(message.text); setCopiedId(message.id); setTimeout(() => setCopiedId(''), 1800); }
-    catch { setNotice('浏览器未允许复制，请手动选择文字。'); }
-  }
   function retry(message: ChatMessage) {
     const index = current.findIndex(item => item.id === message.id);
     const prompt = message.replyTo ? current.find(item => item.id === message.replyTo) : current[index - 1];
     if (prompt?.role === 'user') void run(prompt.text, { ...message, replyTo: prompt.id });
+  }
+  function cancelEdit() {
+    const trigger = editing?.trigger;
+    setEditing(null);
+    requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus(); });
   }
   function newConversation() {
     if (busy || importing || leaving || !loaded) return;
@@ -386,7 +406,12 @@ export function App() {
           {current.map((message, index) => {
             const sources = [...new Map([...(message.sources ?? []), ...(message.quiz?.sources ?? [])].map(item => [JSON.stringify([item.documentId, item.chunkId]), item])).values()];
             return message.role === 'user'
-            ? <article key={message.id} className="msg user"><div className="bubble">{message.text}</div></article>
+            ? <article key={message.id} className="msg user"><div className={`user-message${editing?.id === message.id ? ' editing' : ''}`}>
+              {editing?.id === message.id
+                ? <MessageEditor text={message.text} disabled={busy || importing || leaving || !loaded || !appSession?.modelReady} onCancel={cancelEdit} onSend={text => void run(text, undefined, undefined, message)}/>
+                : <div className="bubble">{message.text}</div>}
+              <MessageTools text={message.text} createdAt={message.createdAt} editDisabled={!canRun} onEdit={() => setEditing({ id: message.id, trigger: document.activeElement instanceof HTMLElement ? document.activeElement : null })} onCopyError={() => setNotice('浏览器未允许复制，请手动选择文字。')}/>
+            </div></article>
             : <article key={message.id} className="msg assistant">
               <div className="msg-head"><img className="brand-mark small" src={LOGO} alt=""/>{message.status && message.status !== 'completed' && <span className={`run-status ${displayStatus(message)}`}>{statusText[displayStatus(message)!]}</span>}</div>
               {!!message.logs?.length && <details className="tool-block">
@@ -405,7 +430,7 @@ export function App() {
               </div>}
               {!!sources.length && <div className="sources">{sources.map(item => <button key={JSON.stringify([item.documentId, item.chunkId])} onClick={() => setSource(item)}>▧ {item.title}</button>)}</div>}
               {message.status !== 'running' && <div className="msg-actions">
-                <button onClick={() => void copy(message)} disabled={!message.text}>{copiedId === message.id ? '已复制' : '复制'}</button>
+                <MessageTools text={stripQuizRecords(message.text)} createdAt={message.createdAt} onCopyError={() => setNotice('浏览器未允许复制，请手动选择文字。')}/>
                 {index === current.length - 1 && nextQuestionAvailable && <button disabled={!canRun} onClick={nextQuestion}>下一题</button>}
                 {index === current.length - 1 && !message.quiz && message.status === 'completed' && states[conversationId]?.phase === 'learning' && <button disabled={!canRun} onClick={() => void run('请继续讲。', undefined, { type: 'continue' })}>继续学习</button>}
                 {index === current.length - 1 && ['cancelled', 'failed', 'interrupted', 'limited'].includes(message.status ?? '') && <button disabled={!canRun} onClick={() => retry(message)}>重试</button>}
@@ -452,4 +477,3 @@ export function App() {
     {authenticated && source && loaded && <SourceViewer source={source} document={sourceDocument} onClose={()=>setSource(null)}/>}
   </div>;
 }
-// TODO(ui): Full accessibility pass.

@@ -303,10 +303,6 @@ test('native stream error after visible output shows interruption guidance (#14)
   await expect(page.getByText('失败', { exact: true })).toBeVisible();
   await expect(page.getByText('连接重置前已显示的部分结果', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
-  console.log('B #14 native reader error UI evidence:', JSON.stringify({
-    actual: await page.getByRole('alert').allTextContents(),
-    required: '回答传输中断，已保留收到的内容。请重试。',
-  }));
   await expect(page.getByText('回答传输中断，已保留收到的内容。请重试。', { exact: true })).toBeVisible();
 });
 

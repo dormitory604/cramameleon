@@ -1,5 +1,7 @@
 # Issue #12 本地学习闭环交付报告
 
+> 历史验收记录：本文仅反映当时的实现、命令与验证结果，不代表当前功能或部署状态。现行说明见 [项目 README](../README.md) 和 [文档目录](README.md)。
+
 对应 [#12：最终验收与交付报告](https://github.com/dormitory604/cramameleon/issues/12)，父规格 [#4](https://github.com/dormitory604/cramameleon/issues/4)。本报告不改写父规格正文，也不关闭任何 issue。交付结论只适用于本阶段的本地学习闭环，验收入口是当前的内部入口。
 
 ## 交付结论

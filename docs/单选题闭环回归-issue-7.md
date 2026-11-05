@@ -1,5 +1,7 @@
 # 单选题闭环回归（Issue #7）
 
+> 历史验收记录：本文仅反映当时的实现、命令与验证结果，不代表当前功能或部署状态。现行说明见 [项目 README](../README.md) 和 [文档目录](README.md)。
+
 本报告对应 [#7：单选题作答、题目答疑与下一题](https://github.com/dormitory604/cramameleon/issues/7)，属于 [父规格 #4](https://github.com/dormitory604/cramameleon/issues/4) 的练习路径。基线为 `73cd696defd170b5bc0de02bccf29e45365130cb`，使用当前内部应用会话和本地资料能力。本任务不开展付费模型重跑，真实模型补验由 #12 通过 #11 的阶段预算执行器统一运行。
 
 ## 历史内容复核
