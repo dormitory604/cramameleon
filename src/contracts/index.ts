@@ -3,7 +3,7 @@ export type Source = { documentId: string; chunkId: string; title: string; text:
 export type Quiz = { id: string; question: string; options: { id: string; text: string; explanation: string }[]; correctOptionId: string; origin: 'generated' | 'adapted' | 'past_paper'; sources: Source[] };
 export type RunStatus = 'running' | 'completed' | 'cancelled' | 'failed' | 'limited' | 'interrupted' | 'waiting';
 export type SkillName = 'concept' | 'review' | 'exam';
-export const TOOL_NAMES = ['present_quiz', 'read_skill', 'update_learning_state', 'search_context', 'cite_sources'] as const;
+export const TOOL_NAMES = ['present_quiz', 'read_skill', 'update_learning_state', 'search_context', 'read_context', 'cite_sources'] as const;
 export type ToolName = typeof TOOL_NAMES[number];
 export const isToolName = (name: unknown): name is ToolName => typeof name === 'string' && (TOOL_NAMES as readonly string[]).includes(name);
 export type LearningState = { preferences: string; progress: string; course?: string; chapter?: string; phase?: 'scope' | 'learning' | 'practice'; skill?: SkillName; skillVersions?: Partial<Record<SkillName, string>>; instructions?: string[]; quizPolicy?: 'allow' | 'avoid' };

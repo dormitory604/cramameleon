@@ -5,7 +5,7 @@ import { PiAgentAdapter } from '../src/agent/PiAgentAdapter.ts';
 import type { AgentInput, AppSession, Document } from '../src/contracts/index.ts';
 const document:Document={id:'long',title:'长讲义',warnings:[],chunks:Array.from({length:6},(_,index)=>({documentId:'long',chunkId:'c'+index,title:'长讲义',location:`段落 ${index+1}`,text:'条件概率：'+String(index).repeat(1795)}))};
 
-test('BLOCKED B: repeated searches retain the evidence already read for a citation', {todo:'B owns ContextSources: later budget-limited reads overwrite longer previously read evidence; #6 partial-evidence acceptance is blocked.'},()=>{
+test('repeated searches retain the evidence already read for a citation',()=>{
  const context=new ContextSources([document]);
  context.search('条件概率');context.search('条件概率');
  const citation=context.resolve([{documentId:'long',chunkId:'c1'}])[0];

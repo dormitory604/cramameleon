@@ -4,7 +4,7 @@ import type { Quiz } from '../contracts/index.ts';
 import { ContextSources } from './contextSources.ts';
 export const sourceRefSchema = { type:'array',maxItems:6,items:{type:'object',properties:{documentId:{type:'string'},chunkId:{type:'string'}},required:['documentId','chunkId'],additionalProperties:false} };
 export function quizTool(onQuiz: (quiz: Quiz) => void, context = new ContextSources([])): AgentTool<any> {
- return { name:'present_quiz',label:'准备练习题',description:'展示一道单选题。答案和每个选项解释必须完整。origin=generated/adapted/past_paper；来源只用本轮 search_context 返回的块 ID，不传入自编页码。真题必须与明确标记真题的资料原文一致。',
+ return { name:'present_quiz',label:'准备练习题',description:'展示一道单选题。答案和每个选项解释必须完整。origin=generated/adapted/past_paper；来源只用本轮 search_context 或 read_context 返回的块 ID，不传入自编页码。真题必须与明确标记真题的资料原文一致。',
  parameters:{type:'object',properties:{
   question:{type:'string',minLength:1,maxLength:3000},options:{type:'array',minItems:2,maxItems:6,items:{type:'object',properties:{id:{type:'string',maxLength:8},text:{type:'string',maxLength:2000},explanation:{type:'string',maxLength:3000}},required:['id','text','explanation'],additionalProperties:false}},
   correctOptionId:{type:'string'},origin:{type:'string',enum:['generated','adapted','past_paper']},sourceRefs:sourceRefSchema

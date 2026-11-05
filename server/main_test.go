@@ -193,6 +193,24 @@ func TestFragmentedToolCall(t *testing.T) {
 		t.Fatal(code, body)
 	}
 }
+func TestReadContextToolForwarding(t *testing.T) {
+	s, srv, client := setup(t)
+	login(t, srv, client)
+	mock(t, s, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"read-first\",\"function\":{\"name\":\"read_context\",\"arguments\":\"{\\\"documentId\\\":\\\"old-site:material:5232\\\",\\\"startChunk\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\ndata: [DONE]\n\n")
+	})
+	v := request("read-context")
+	var tool wireTool
+	if err := json.Unmarshal([]byte(`{"type":"function","function":{"name":"read_context","description":"Read selected cached text","parameters":{"type":"object","properties":{"documentId":{"type":"string"}}}}}`), &tool); err != nil {
+		t.Fatal(err)
+	}
+	v.Tools = []wireTool{tool}
+	code, body := post(t, srv, client, v)
+	if code != http.StatusOK || !strings.Contains(body, `"name":"read_context"`) || !strings.Contains(body, `"documentId":"old-site:material:5232"`) || !strings.Contains(body, `"stopReason":"toolUse"`) {
+		t.Fatalf("read_context was not forwarded: %d, %s", code, body)
+	}
+}
 func TestInterruptedStreamKeepsReservation(t *testing.T) {
 	s, srv, c := setup(t)
 	login(t, srv, c)

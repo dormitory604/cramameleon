@@ -7,8 +7,8 @@ export function pptx() {return zipSync({
  'ppt/slides/slide1.xml':strToU8('<p:sld xmlns:p="p" xmlns:a="a"><a:p><a:r><a:t>第二张：条件概率</a:t></a:r></a:p></p:sld>'),
  'ppt/slides/slide2.xml':strToU8('<p:sld xmlns:p="p" xmlns:a="a"><a:p><a:r><a:t>第一张：事件</a:t></a:r></a:p></p:sld>')
 });}
-export function pdf(empty=false,emptySecondPage=false) {
- const stream=empty?'':'BT /F1 12 Tf 72 700 Td (Conditional probability: P A given B) Tj ET';
+export function pdf(empty=false,emptySecondPage=false,firstPageText='Conditional probability: P A given B') {
+ const stream=empty?'':`BT /F1 12 Tf 72 700 Td (${firstPageText.replace(/[\\()]/g,'\\$&')}) Tj ET`;
  const secondStream=emptySecondPage?'':stream;
  const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>',
  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>',

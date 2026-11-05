@@ -288,7 +288,7 @@ test('missing-material controlled response has no source tools or fabricated cit
  const requests=await setup(page,()=>({type:'text_delta',delta:'当前没有已选学校课件，无法确认本校考试范围。请导入 PPTX、文本 PDF 或 TXT 后勾选；也可选择按通用知识复习。'}));
  await send(page,'请只按我的学校课件带我复习概率论，目前没有上传资料');
  expect(requests).toHaveLength(1);
- for(const tool of ['search_context','cite_sources'])expect(requests[0].tools.some((item:any)=>item.function.name===tool)).toBe(false);
+ for(const tool of ['search_context','read_context','cite_sources'])expect(requests[0].tools.some((item:any)=>item.function.name===tool)).toBe(false);
  await expect(page.getByLabel('聊天记录')).toContainText('无法确认本校考试范围');
  await expect(page.getByRole('button',{name:/^▧ /})).toHaveCount(0);
  await expect(page.getByLabel('本轮资料范围')).toHaveCount(0);
