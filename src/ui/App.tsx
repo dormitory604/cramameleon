@@ -162,7 +162,7 @@ export function App() {
       const data = response.ok ? await response.json() as AppSession : null;
       if (generation !== sessionGeneration.current) return;
       if(response.status===401&&initial&&!userId){setAuthenticated(false);return;}
-      if(response.status===403&&initial&&!userId){setAuthenticated(false);setNotice('当前账号尚未获得内测资格，请联系项目维护者。');return;}
+      if(response.status===403&&initial&&!userId){setAuthenticated(false);setNotice('当前账号暂不可进入，请重新通过破壁计划授权或联系项目维护者。');return;}
       if (response.status === 401 || response.status===403 || data && userId && data.user.id !== userId) { revokeAccess(); return; }
       if (!data) throw new Error();
       setAppSession(data);
@@ -184,7 +184,7 @@ export function App() {
   useEffect(() => {
     void refreshHealth();
     const entryError=new URLSearchParams(location.search).get('entryError');
-    if(entryError){setNotice(entryError==='ENTRY_NOT_ALLOWED'?'当前账号尚未获得内测资格，请联系项目维护者。':entryError==='OLD_SITE_UNAVAILABLE'?'暂时无法连接破壁计划，请稍后重新进入。':'本次进入授权未完成，请从破壁计划重新进入。');history.replaceState(null,'',location.pathname);}
+    if(entryError){setNotice(entryError==='ENTRY_NOT_ALLOWED'?'当前账号暂不可进入，请重新通过破壁计划授权或联系项目维护者。':entryError==='OLD_SITE_UNAVAILABLE'?'暂时无法连接破壁计划，请稍后重新进入。':'本次进入授权未完成，请从破壁计划重新进入。');history.replaceState(null,'',location.pathname);}
     void refreshSession(true);
     return () => { sessionGeneration.current++; active.current?.controller.abort(); };
   }, []);
@@ -359,7 +359,7 @@ export function App() {
     if (id === conversationId) setConversationId(crypto.randomUUID());
   }
 
-  if(authenticated===false&&entryConfig?.mode!=='internal')return <div className="auth-screen"><section className="auth-card"><img src={LOGO} alt="" className="brand-mark"/><h1>Cramameleon</h1><p>使用破壁计划账号进入学习空间</p>{notice&&<div role="alert" className="notice">{notice}</div>}{entryConfig?.mode==='old-site'?<a className="primary-button entry-link" href={entryConfig.oldSiteEntryUrl}>从破壁计划进入</a>:<p role="status">正在确认进入方式…</p>}<small>学习记录保存在当前浏览器，按账号隔离。</small></section></div>;
+  if(authenticated===false&&entryConfig?.mode!=='internal')return <div className="auth-screen"><section className="auth-card"><img src={LOGO} alt="" className="brand-mark"/><h1>Cramameleon</h1><p>使用破壁计划账号进入学习空间</p>{entryConfig?.oldSiteAccessMode==='beta'&&<p role="status">当前为内测模式，仅开放给获邀账号。</p>}{notice&&<div role="alert" className="notice">{notice}</div>}{entryConfig?.mode==='old-site'?<a className="primary-button entry-link" href={entryConfig.oldSiteEntryUrl}>从破壁计划进入</a>:<p role="status">正在确认进入方式…</p>}<small>学习记录保存在当前浏览器，按账号隔离。</small></section></div>;
   return <div className={`app ${sidebarOpen ? 'sidebar-open' : ''}`}>
     <aside className="sidebar" aria-label="会话列表">
       <div className="sidebar-header">

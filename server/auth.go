@@ -25,10 +25,13 @@ import (
 
 const flowCookie = "cram_auth_flow"
 const integrationScope = "entry materials:read"
+const oldSiteAccessBeta = "beta"
+const oldSiteAccessPublic = "public"
 
 type oldSiteConfig struct {
 	publicURL, issuer, entryURL, authorizeURL, tokenURL, revokeURL string
 	clientID, clientSecret                                         string
+	accessMode                                                     string
 	allowed                                                        map[string]bool
 	key                                                            []byte
 }
@@ -49,6 +52,10 @@ func trustedURL(raw string, originOnly bool) (*url.URL, error) {
 }
 
 func (o *oldSiteConfig) load() error {
+	o.accessMode = env("APP_OLD_SITE_ACCESS_MODE", oldSiteAccessBeta)
+	if o.accessMode != oldSiteAccessBeta && o.accessMode != oldSiteAccessPublic {
+		return fmt.Errorf("APP_OLD_SITE_ACCESS_MODE must be beta or public")
+	}
 	o.publicURL = strings.TrimRight(os.Getenv("APP_PUBLIC_URL"), "/")
 	_, e := trustedURL(o.publicURL, true)
 	if e != nil {
@@ -83,10 +90,21 @@ func (o *oldSiteConfig) load() error {
 		}
 		o.allowed[id] = true
 	}
-	if len(o.allowed) == 0 {
+	if o.accessMode == oldSiteAccessBeta && len(o.allowed) == 0 {
 		return fmt.Errorf("APP_ALLOWED_OLD_USER_IDS must explicitly allow at least one old-site user")
 	}
 	return nil
+}
+
+func (o oldSiteConfig) mode() string {
+	if o.accessMode == oldSiteAccessPublic {
+		return oldSiteAccessPublic
+	}
+	return oldSiteAccessBeta
+}
+
+func (o oldSiteConfig) allows(subject string) bool {
+	return validSubject(subject) && (o.mode() == oldSiteAccessPublic || o.allowed[subject])
 }
 
 func validSubject(s string) bool {
@@ -315,7 +333,7 @@ func (s *appServer) finishOldSiteAuth(c *gin.Context) {
 		s.entryFailed(c, "AUTH_RESPONSE_INVALID")
 		return
 	}
-	if !s.cfg.oldSite.allowed[identity.Subject] {
+	if !s.cfg.oldSite.allows(identity.Subject) {
 		s.revokeCredential(ctx, identity.AccessToken)
 		s.entryFailed(c, "ENTRY_NOT_ALLOWED")
 		return
@@ -432,8 +450,8 @@ func (s *appServer) authenticate(c *gin.Context) {
 			fail(c, 503, "STORAGE_FAILED", "会话存储暂不可用")
 			return
 		}
-		if issuer != s.cfg.oldSite.issuer || !s.cfg.oldSite.allowed[subject] {
-			fail(c, 403, "ENTRY_NOT_ALLOWED", "当前账号尚未获得内测资格")
+		if issuer != s.cfg.oldSite.issuer || !s.cfg.oldSite.allows(subject) {
+			fail(c, 403, "ENTRY_NOT_ALLOWED", "当前账号暂不可进入，请重新通过破壁计划授权或联系项目维护者")
 			return
 		}
 		c.Set("userName", name)
