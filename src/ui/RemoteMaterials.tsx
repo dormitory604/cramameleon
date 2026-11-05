@@ -8,7 +8,7 @@ import type { Quota, ReadAccess, RemoteItem, RemotePage, RemoteResource } from '
 type Props = { session: AppSession; documents: Document[]; initial?: AppSession['initialContext']; onClose: () => void; onImport: (docs: Document[]) => void; onBusy: (busy: boolean) => void };
 const plural = (kind: 'material' | 'package') => kind === 'material' ? 'materials' : 'packages';
 const bytes = (size: number) => size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : `${Math.ceil(size / 1024)} KB`;
-const authCodes = ['AUTH_REQUIRED', 'MATERIAL_AUTH_EXPIRED', 'SESSION_CHANGED', 'ENTRY_NOT_ALLOWED'];
+const authCodes = ['AUTH_REQUIRED', 'MATERIAL_AUTH_EXPIRED', 'SESSION_CHANGED'];
 // One resource the user has decided to read: a single material, or chosen files of one package.
 type Choice = { resource: RemoteResource; items: RemoteItem[] };
 const choiceKey = (resource: Pick<RemoteResource, 'kind' | 'id'>) => `${resource.kind}:${resource.id}`;
@@ -31,6 +31,7 @@ function Preview({ url, format, name }: { url?: string; format: string; name: st
 export function RemoteMaterials({ session, documents, initial, onClose, onImport, onBusy }: Props) {
  const [kind, setKind] = useState<'material' | 'package'>(initial?.packageId ? 'package' : 'material');
  const [query, setQuery] = useState(''); const [search, setSearch] = useState(''); const [page, setPage] = useState(1);
+ const [showSearch, setShowSearch] = useState(!initial);
  const [results, setResults] = useState<RemotePage<RemoteResource> | null>(null);
  const [resource, setResource] = useState<RemoteResource | null>(null);
  const [items, setItems] = useState<RemoteItem[]>([]); const [itemPage, setItemPage] = useState(1); const [moreItems, setMoreItems] = useState(false);
@@ -51,25 +52,52 @@ export function RemoteMaterials({ session, documents, initial, onClose, onImport
   return () => controller.abort();
  }, [userId]);
  useEffect(() => {
-  if (resource) return;
-  const controller = new AbortController(); setLoading(true);setError('');
+  if (resource || !showSearch) return;
+  const controller = new AbortController(); setLoading(true);
   void oldSiteRequest<RemotePage<RemoteResource>>(userId, `/${plural(kind)}?search=${encodeURIComponent(search)}&page=${page}`, controller.signal).then(setResults).catch(e => { if (!controller.signal.aborted) report(e); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
   return () => controller.abort();
- }, [kind, search, page, resource, userId]);
- async function open(kind: 'material' | 'package', id: string) {
+ }, [kind, search, page, resource, userId, showSearch]);
+ async function open(kind: 'material' | 'package', id: string, entry?: AppSession['initialContext']) {
   metadata.current?.abort();const controller = new AbortController();metadata.current = controller;setLoading(true);setError('');setItems([]);setItemPage(1);setPreviewItem(null);
   const saved = basket.find(choice => choiceKey(choice.resource) === choiceKey({ kind, id }));
-  setSelected(saved ? saved.items.map(item => item.id) : initial?.packageId === id && initial.itemId ? [initial.itemId] : []);
+  setSelected(saved ? saved.items.map(item => item.id) : entry?.itemId ? [entry.itemId] : []);
   try {
    const detail = await oldSiteRequest<RemoteResource>(userId, `/${plural(kind)}/${id}`, controller.signal);
-   let catalog: RemotePage<RemoteItem> | undefined;
-   if (kind === 'package') catalog = await oldSiteRequest<RemotePage<RemoteItem>>(userId, `/packages/${id}/items`, controller.signal);
-   controller.signal.throwIfAborted();setResource(detail);setKind(kind);
-   if (catalog) { setItems(catalog.items);setMoreItems(catalog.hasMore); }
-  } catch(e) { if (!controller.signal.aborted) report(e); }
+   const automatic = Boolean(entry?.importId && detail.availability === 'available');
+   let catalogItems: RemoteItem[] = [];
+   if (kind === 'package') {
+    let catalog: RemotePage<RemoteItem>;
+    let catalogPage = 0;
+    do {
+     catalogPage++;
+     catalog = await oldSiteRequest<RemotePage<RemoteItem>>(userId, `/packages/${id}/items${catalogPage === 1 ? '' : `?page=${catalogPage}`}`, controller.signal);
+     catalogItems = [...catalogItems, ...catalog.items];
+    } while (catalog.hasMore && automatic && (entry?.itemId
+     ? !catalogItems.some(item => item.id === entry.itemId)
+     : catalogItems.filter(item => item.supported).length <= 20));
+    controller.signal.throwIfAborted();
+    setItems(catalogItems);setMoreItems(catalog.hasMore);setItemPage(catalogPage);
+   }
+   controller.signal.throwIfAborted();
+   setResource(detail);setKind(kind);
+   if (!automatic) return;
+   const chosen = catalogItems.filter(item => item.supported && (!entry?.itemId || item.id === entry.itemId));
+   if (kind === 'package') {
+    const pending = chosen.filter(item => !documents.some(doc => doc.id === remoteDocumentId(detail, item.id)));
+    if (!chosen.length) { setError('这个课程包里没有可自动导入的文件。');return; }
+    if (chosen.length > 20 || documents.length + pending.length > 20) {
+     setError('当前对话最多保留 20 份资料，请从课程包中选择要复习的文件。');return;
+    }
+    setSelected(chosen.map(item => item.id));
+   }
+   await importChoices([{ resource: detail, items: kind === 'package' ? chosen : [] }]);
+  } catch(e) { if (!controller.signal.aborted) { report(e);setShowSearch(true); } }
   finally { if (!controller.signal.aborted) setLoading(false); }
  }
- useEffect(() => { if (initial?.materialId) void open('material', initial.materialId);else if (initial?.packageId) void open('package', initial.packageId); }, []);
+ useEffect(() => {
+  if (initial?.materialId) void open('material', initial.materialId, initial);
+  else if (initial?.packageId) void open('package', initial.packageId, initial);
+ }, []);
  async function more() {
   if (!resource || loading) return;
   const controller = new AbortController();metadata.current = controller;setLoading(true);
@@ -139,7 +167,7 @@ export function RemoteMaterials({ session, documents, initial, onClose, onImport
  }
  function browse(keep: boolean) {
   if (keep && current) setBasket([...others, current]);
-  setResource(null);setSelected([]);setPreviewItem(null);setError('');
+  setResource(null);setSelected([]);setPreviewItem(null);setError('');setShowSearch(true);
  }
  return <dialog ref={dialog} className="source-modal remote-materials" aria-labelledby="remote-title" onCancel={e=>{e.preventDefault();if(!busy)onClose();}} onClick={e=>{if(e.target!==e.currentTarget||busy)return;const r=e.currentTarget.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)onClose();}}>
   <button type="button" className="icon-button modal-close" aria-label="关闭课程资料" disabled={busy} onClick={onClose}>×</button>

@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { pdf } from '../materialFixtures.ts';
 
-test('browse is free; explicit package import retries one receipt, parses selected files and reuses user cache', async ({ page }) => {
+for (const automatic of [false, true]) {
+test(`package import ${automatic ? 'starts automatically from the review button' : 'waits for manual selection when browsing'} and retries one receipt`, async ({ page }) => {
  const user='arxiv-material-fixture';const requestIds:string[]=[];let contents=0;
  const modelRequests:any[]=[];
  const resource={id:'12',kind:'package',title:'概率论课程包',courseName:'概率论',format:'zip',size:100,url:'https://materials.example.com/package/12',availability:'available',alreadyDownloaded:false};
@@ -9,7 +10,7 @@ test('browse is free; explicit package import retries one receipt, parses select
  await page.route('**/api/**',async route=>{
   const request=route.request();const path=new URL(request.url()).pathname;
   if(path==='/api/health')return route.fulfill({json:{status:'ok'}});
-  if(path==='/api/session')return route.fulfill({json:{mode:'old-site',user:{id:user,name:'测试同学'},oldSite:{status:'ready'},initialContext:{packageId:'12'},modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-05',limit:100000,used:0}}});
+  if(path==='/api/session')return route.fulfill({json:{mode:'old-site',user:{id:user,name:'测试同学'},oldSite:{status:'ready'},initialContext:{packageId:'12',...(automatic ? {importId:'review-click'} : {})},modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-05',limit:100000,used:0}}});
   if(path==='/api/model'){
    const body=request.postDataJSON();modelRequests.push(body);
    const last=body.messages.at(-1);
@@ -32,11 +33,15 @@ test('browse is free; explicit package import retries one receipt, parses select
   return route.fulfill({status:404});
  });
  await page.goto('/');const dialog=page.getByRole('dialog',{name:'课程资料'});
- await expect(dialog.getByText('概率论课程包',{exact:true})).toBeVisible();expect(requestIds).toHaveLength(0);expect(contents).toBe(0);
- await expect(dialog.getByRole('checkbox',{name:/ignored.exe/})).toBeDisabled();
- await dialog.getByRole('checkbox',{name:/lecture.txt/}).check();await dialog.getByRole('checkbox',{name:/exercise.md/}).check();
- await expect(dialog).toContainText('首次读取此课程包扣 1 次');
- await dialog.getByRole('button',{name:'确认读取 2 份文件'}).click();await expect(dialog.getByRole('alert')).toContainText('模拟连接中断');
+ await expect(dialog.getByText('概率论课程包',{exact:true})).toBeVisible();
+ if (!automatic) {
+  expect(requestIds).toHaveLength(0);expect(contents).toBe(0);
+  await expect(dialog.getByRole('checkbox',{name:/ignored.exe/})).toBeDisabled();
+  await dialog.getByRole('checkbox',{name:/lecture.txt/}).check();await dialog.getByRole('checkbox',{name:/exercise.md/}).check();
+  await expect(dialog).toContainText('首次读取此课程包扣 1 次');
+  await dialog.getByRole('button',{name:'确认读取 2 份文件'}).click();
+ }
+ await expect(dialog.getByRole('alert')).toContainText('模拟连接中断');
  await dialog.getByRole('button',{name:'确认读取 2 份文件'}).click();await expect(dialog).toHaveCount(0);
  expect(requestIds).toHaveLength(2);expect(requestIds[0]).toBe(requestIds[1]);expect(contents).toBe(2);
  await page.locator('.materials-panel summary').click();await expect(page.getByRole('button',{name:'查看文本：lecture.txt',exact:true})).toBeVisible();
@@ -55,6 +60,7 @@ test('browse is free; explicit package import retries one receipt, parses select
  expect(modelRequests[1].messages.at(-1).content).toContain('P(A|B)');
  expect(modelRequests[0].messages[0].content).not.toContain('旧站授权尚未接入');
 });
+}
 
 test('an imported old-site PDF can be read from its first question, cited and reused after reload despite earlier missing-material history', async ({ page }) => {
  const user='old-site-pdf-reader',question='1. For disjoint events add their probabilities.';
