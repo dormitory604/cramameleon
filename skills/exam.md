@@ -53,7 +53,7 @@ sourceRefs 只填真实的 documentId/chunkId，不手写来源页码、链接�
 前提：当前没有选中资料或既有题目；router 已读取 exam。
 
 工具：update_learning_state({"course":"概率论","chapter":"互斥事件","progress":"练习互斥事件的加法公式","phase":"practice"})
-工具：present_quiz({"question":"若事件 A、B 互斥，P(A)=0.2，P(B)=0.3，则 P(A∪B) 是多少？","options":[{"id":"A","text":"0.5","explanation":"互斥表示 A、B 不能同时发生，因此 P(A∩B)=0，并集概率为 0.2+0.3=0.5。"},{"id":"B","text":"0.06","explanation":"0.2×0.3=0.06 混淆了并集与交集。独立事件的交集概率才可直接用概率乘积计算；本题的互斥条件要求计算两者概率之和。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
+工具：present_quiz({"question":"若事件 $A$、$B$ 互斥，$P(A)=0.2$，$P(B)=0.3$，则 $P(A\\cup B)$ 是多少？","options":[{"id":"A","text":"$0.5$","explanation":"互斥表示 $A$、$B$ 不能同时发生，因此 $P(A\\cap B)=0$，并集概率为 $0.2+0.3=0.5$。"},{"id":"B","text":"$0.06$","explanation":"$0.2\\times0.3=0.06$ 混淆了并集与交集。独立事件的交集概率才可直接用概率乘积计算；本题的互斥条件要求计算两者概率之和。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
 文字：请选择一个选项，作答后可查看解释。
 终态：waiting。
 
@@ -68,6 +68,6 @@ sourceRefs 只填真实的 documentId/chunkId，不手写来源页码、链接�
 前提：继续使用本轮已知主题；此轮重新读取 exam，原来的二选一要求只针对前一题。
 
 工具：update_learning_state({"chapter":"互斥与独立","progress":"辨析正概率事件的互斥与独立","phase":"practice"})
-工具：present_quiz({"question":"已知 P(A)>0、P(B)>0，且 A、B 互斥，以下哪项成立？","options":[{"id":"A","text":"P(A∩B)=0，因此 A、B 不独立","explanation":"互斥给出 P(A∩B)=0，而正概率保证 P(A)P(B)>0，两者不相等，因而不独立。"},{"id":"B","text":"P(A∩B)=0，因此 A、B 必定独立","explanation":"独立要求 P(A∩B)=P(A)P(B)；本题概率均为正，零不等于正的乘积。"},{"id":"C","text":"P(A∪B)=0，因此 A、B 不独立","explanation":"互斥的是同时发生的交集；并集概率等于两个正概率之和，不能为零。"},{"id":"D","text":"P(A|B)=P(A)，因此 A、B 独立","explanation":"因为 B 的概率为正且交集为零，P(A|B)=0，而题设 P(A)>0，二者不相等。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
+工具：present_quiz({"question":"已知 $P(A)>0$、$P(B)>0$，且 $A$、$B$ 互斥，以下哪项成立？","options":[{"id":"A","text":"$P(A\\cap B)=0$，因此 $A$、$B$ 不独立","explanation":"互斥给出 $P(A\\cap B)=0$，而正概率保证 $P(A)P(B)>0$，两者不相等，因而不独立。"},{"id":"B","text":"$P(A\\cap B)=0$，因此 $A$、$B$ 必定独立","explanation":"独立要求 $P(A\\cap B)=P(A)P(B)$；本题概率均为正，零不等于正的乘积。"},{"id":"C","text":"$P(A\\cup B)=0$，因此 $A$、$B$ 不独立","explanation":"互斥的是同时发生的交集；并集概率等于两个正概率之和，不能为零。"},{"id":"D","text":"$P(A\\mid B)=P(A)$，因此 $A$、$B$ 独立","explanation":"因为 $B$ 的概率为正且交集为零，$P(A\\mid B)=0$，而题设 $P(A)>0$，二者不相等。"}],"correctOptionId":"A","origin":"generated","sourceRefs":[]})
 文字：请选择一个选项。
 终态：waiting。

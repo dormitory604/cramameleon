@@ -1,4 +1,4 @@
-module cramameleon-demo
+module github.com/dormitory604/cramameleon/server
 
 go 1.22
 

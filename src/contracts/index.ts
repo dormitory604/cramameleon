@@ -8,17 +8,16 @@ export type ToolName = typeof TOOL_NAMES[number];
 export const isToolName = (name: unknown): name is ToolName => typeof name === 'string' && (TOOL_NAMES as readonly string[]).includes(name);
 export type LearningState = { preferences: string; progress: string; course?: string; chapter?: string; phase?: 'scope' | 'learning' | 'practice'; skill?: SkillName; skillVersions?: Partial<Record<SkillName, string>>; instructions?: string[]; quizPolicy?: 'allow' | 'avoid' };
 export type ChatMessage = { id: string; conversationId: string; createdAt: number; role: 'user' | 'assistant'; text: string; status?: RunStatus; logs?: string[]; modelRequests?: number; toolCalls?: number; quiz?: Quiz; selectedOption?: string; revealed?: boolean; sources?: Source[]; error?: string; errorCode?: string; replyTo?: string; editedAt?: number; editArchive?: true;
-  // Material ids selected when this turn was submitted (#6); undefined on records saved before turn scopes existed.
+  // Material ids selected when this turn was submitted; undefined on older records.
   selectedMaterialIds?: string[];
   // Editing resumes from the state before this prompt, rather than a later turn.
   learningStateBefore?: LearningState };
 export type HistoryMessage = { role: 'user' | 'assistant'; text: string };
-export type MaterialCandidate = { id: string; title: string; kind: 'material' | 'package'; url?: string };
 export type Document = { id: string; title: string; chunks: Source[]; warnings: string[]; kind?: 'material' | 'past_paper'; format?: string; size?: number; importedAt?: number; fingerprint?: string; origin?: 'local' | 'old-site'; remoteRef?: { resourceId: string; kind: 'material' | 'package'; itemId?: string; url: string } };
 export type MaterialScope = { documents: Document[]; selectedIds: string[] };
 export type ArchiveEntry = { name: string; size: number; supported: boolean };
 export type ImportResult = { documents: Document[]; warnings: string[] };
-export type AgentAction = { type: 'send'; text: string } | { type: 'retry'; text: string; userMessageId: string } | { type: 'continue' } | { type: 'next_question' } | { type: 'confirm_materials'; ids: string[] };
+export type AgentAction = { type: 'send'; text: string } | { type: 'retry'; text: string; userMessageId: string } | { type: 'continue' } | { type: 'next_question' };
 export type AgentInput = { sessionId: string; turnId: string; action: AgentAction; history: HistoryMessage[]; documents: Document[]; state: LearningState; signal: AbortSignal };
 export type EntryConfig = { mode: 'internal' | 'old-site'; oldSiteEntryUrl?: string };
 export type AppSession = { user: { id: string; name: string }; mode: 'internal' | 'old-site' | 'guest'; oldSite?: { status: 'ready' | 'expired' | 'unavailable' }; initialContext?: { materialId?: string; packageId?: string; itemId?: string }; modelReady: boolean; model: string; limits: { maxToolCalls: number; timeoutSeconds: number; maxOutputTokens: number }; budget: { day: string; limit: number; used: number } };
@@ -29,8 +28,6 @@ export type AgentEvent = Envelope & (
   | { type: 'tool_status'; category: 'model' | 'tool'; status: 'started' | 'completed'; message: string }
   | { type: 'quiz_ready'; quiz: Quiz }
   | { type: 'sources_ready'; sources: Source[] }
-  | { type: 'materials_ready'; materials: MaterialCandidate[] }
-  | { type: 'document_ready'; document: Document }
   | { type: 'state_update'; state: LearningState }
   | { type: 'usage'; usage: ModelUsage }
   | { type: 'error'; code: string; message: string }

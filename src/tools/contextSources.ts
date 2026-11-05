@@ -7,6 +7,7 @@ export class ContextSources {
  private read = new Map<string, Source>();
  private remaining = 8000;
  constructor(documents: Document[]) { this.docs = documents.slice(0,20); }
+ get budgetExhausted() { return this.remaining <= 0; }
  private remember(source: Source) {
   const previous=this.read.get(key(source));
   if(!previous || previous.text.length<source.text.length)this.read.set(key(source),source);

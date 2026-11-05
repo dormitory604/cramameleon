@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { strToU8, zipSync } from 'fflate';
 import { pdf, docx, pptx } from '../materialFixtures.ts';
-const session={user:{id:'issue-6-user',name:'test'},mode:'internal',modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-04',limit:100000,used:0}};
+const session={user:{id:'material-scope-user',name:'test'},mode:'internal',modelReady:true,model:'deepseek-flash',limits:{maxToolCalls:6,timeoutSeconds:120,maxOutputTokens:512},budget:{day:'2026-11-04',limit:100000,used:0}};
 const file=(name:string,text:string)=>({name,mimeType:'text/plain',buffer:Buffer.from(strToU8(text))});
 async function setup(page:Page,reply:(body:any)=>any) {
  const requests:any[]=[];
@@ -155,7 +155,7 @@ for (const change of ['deselect', 'remove'] as const) test(`${change} and reload
  await page.getByRole('button',{name:'下一题',exact:true}).click();
  await expect(page.getByRole('button',{name:'停止',exact:true})).toHaveCount(0);
  const continuity=JSON.stringify(requests[sameScope]);
- // #7 projects quiz sources by reference only (no cached text), so the quiz question marks quiz continuity here.
+ // Quiz sources contain references, so the question marks quiz continuity here.
  for(const present of ['条件事件的概率须满足什么条件','QUOTED_ANSWER_SCOPE_6','用户作答：A'])expect(continuity).toContain(present);
  await openMaterials(page);
  if(change==='deselect')await page.getByLabel('使用资料 原资料.txt',{exact:true}).uncheck();
@@ -228,7 +228,7 @@ test('retry uses the current material scope and retains the retried turn after r
 for(const citation of ['answer','quiz'] as const) test(`legacy ${citation} citations to unselected materials isolate all old prose without losing records`,async({page})=>{
  const requests=await setup(page,()=>({type:'text_delta',delta:'只回答当前问题。'}));
  // Compatibility fixture written to the native v2 record store (works in dev and production builds), then normal UI restore.
- await page.evaluate(async citation=>{
+ await page.evaluate(async ({citation,userId})=>{
   const saveData=async(userId:string,record:unknown)=>{
    const db=await new Promise<IDBDatabase>((resolve,reject)=>{const request=indexedDB.open('cramameleon',2);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
    await new Promise<void>((resolve,reject)=>{const transaction=db.transaction('users','readwrite');transaction.objectStore('users').put(record,userId);transaction.oncomplete=()=>resolve();transaction.onerror=()=>reject(transaction.error);});
@@ -236,7 +236,7 @@ for(const citation of ['answer','quiz'] as const) test(`legacy ${citation} citat
   };
   const source={documentId:'old-doc',chunkId:'chunk-1',title:'旧资料.txt',text:'LEGACY_SOURCE_6',location:'段落 1'};
   const quiz={id:'old-quiz',question:'旧题目',options:[{id:'A',text:'正确',explanation:'正确原因'},{id:'B',text:'错误',explanation:'错误原因'}],correctOptionId:'A',origin:'adapted',sources:[source]};
-  await saveData('issue-6-user',{version:2,states:{},materials:{old:{documents:[],selectedIds:[]}},messages:[
+  await saveData(userId,{version:2,states:{},materials:{old:{documents:[],selectedIds:[]}},messages:[
    {id:'general-u',conversationId:'general',createdAt:1,role:'user',text:'普通对话'},
    {id:'general-a',conversationId:'general',createdAt:2,role:'assistant',status:'completed',text:'LEGACY_GENERAL_CONTINUITY_6'},
    {id:'old-u',conversationId:'old',createdAt:3,role:'user',text:'请根据旧资料说明'},
@@ -244,7 +244,7 @@ for(const citation of ['answer','quiz'] as const) test(`legacy ${citation} citat
    {id:'follow-u',conversationId:'old',createdAt:5,role:'user',text:'再解释'},
    {id:'follow-a',conversationId:'old',createdAt:6,role:'assistant',status:'completed',text:'LEGACY_UNCITED_PARAPHRASE_6'},
   ]});
- },citation);
+ },{citation,userId:session.user.id});
  await page.reload();
  await expect(page.getByLabel('聊天记录')).toContainText('LEGACY_QUOTED_6');
  await expect(page.getByLabel('聊天记录')).toContainText('LEGACY_UNCITED_PARAPHRASE_6');

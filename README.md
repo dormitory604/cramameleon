@@ -1,127 +1,167 @@
 # Cramameleon
 
-旧站账号授权、课程资料接入、下载权益和内测名单配置见 [旧站身份与课程资料接入](docs/旧站身份与资料接入-2026-11-05.md)。生产旧站模式使用 `.env.old-site.example` 模板；此模式关闭共享口令入口，访客配置不能绕过账号准入。
+面向课程学习的 AI 助手，支持概念讲解、系统复习、单题练习，以及基于课程资料的阅读和引用。正式入口通过破壁计划旧站账号授权；本仓库包含独立的 React 前端、浏览器 Agent 和 Go 后端。
 
-B 分支已将固定脚本 Demo 替换为真实 DeepSeek 模型代理。React UI → 浏览器 Pi Core → Go 单次模型代理；工具仍在浏览器执行，Go 不运行 Agent 循环。
+## 当前功能
 
-当前可用：内部访问口令、持久应用会话、多对话、教学 Skill 与学习进度、真实模型问答、资料改编题及本地反馈、SQLite 预算，以及本地文件导入、解析、选择、检索和引用闭环。模型未配置时禁用发送，仍可导入与查看本地资料。
+- 流式问答，支持 Markdown、代码、表格和 LaTeX 公式；可停止生成、重试未完成回答、切换和删除对话。
+- 用户消息可复制、编辑并重新发送；Agent 回复可复制。桌面端悬停或键盘聚焦时显示操作，触屏直接显示。编辑从该条消息之前重新回答，原对话保留为“编辑前版本”，输入框草稿保留。
+- 默认浅色，支持手动切换深色；选择保存在当前浏览器。
+- concept、review、exam 三种教学 Skill；按当前请求组织讲解、复习和练习，保存会话偏好、课程、章节和学习位置。
+- 单选题支持自编、基于已读资料改编，以及经原文核对的真题；作答和查看解析在本地完成，不调用模型。
+- 本地文件导入与旧站课程资料导入，共用浏览器 Worker 解析、勾选范围、文本阅读与来源查看。旧站支持单份资料、课程包分页目录和按条目读取。
+- 消息、作答、资料缓存、勾选和学习状态按账号保存在当前浏览器；支持刷新恢复、保存状态提示和存储失败重试。
 
-外观默认浅色，不随系统深色设置自动变化。点击顶部的“浅色／深色”按钮切换，选择保存在当前浏览器，刷新后继续使用；浏览器禁止保存时仍可在当前页面切换。
+当前能力与限制以本 README、[架构与模块契约](项目架构与模块契约.md) 和代码为准。日期命名的交付报告是历史记录，索引见 [文档目录](docs/README.md)。
 
-鼠标悬停在消息上可复制文本，用户消息还可编辑并重新发送。编辑后从该条消息之前的上下文重新回答，原对话完整保留为“编辑前版本”；输入框中未发送的草稿不受影响。触屏设备直接显示操作按钮，键盘聚焦时也会显示。
+## 运行结构
 
-## 配置和运行
+~~~text
+React UI → PiAgentAdapter → Pi Agent Core → /api/model → Go/Gin → DeepSeek
+                 ↕
+      教学 Skill / 学习状态 / 已选文本阅读与引用 / 单选题
+                 ↓
+             UI / IndexedDB
 
-要求 Node >=22.19、Go >=1.22。复制 `.env.internal.example` 为 `.env.internal`，填写：
+课程资料 UI → Go 旧站适配器 → 旧站授权与资料 API
+      ↓
+浏览器 Worker 解析 → 当前对话已选文本
+~~~
 
-- `APP_ALLOW_GUEST`：设为 `1` 时直接进入聊天。默认 `0`，通过聊天输入区的内部口令表单验证。
-- `APP_ACCESS_TOKEN`：内部模式使用的随机访问口令，至少 24 字符。
-- `DEEPSEEK_API_KEY`：真实密钥，仅存在服务器环境文件。
-- `DEEPSEEK_MODEL`：默认 `deepseek-flash`，是服务端唯一允许的模型。
-- `APP_DAILY_TOKEN_BUDGET`：默认 1,000,000，按北京时间自然日计算全局输入+输出 token。
-- `APP_MAX_OUTPUT_TOKENS`：默认 2048；`APP_MAX_INPUT_BYTES`：默认 64000。
+Agent 循环和工具在浏览器执行，Go 转发单次模型请求，并负责身份、旧站接入、预算与并发。模型密钥和旧站受限凭据留在服务端。聊天和文件全文不存入服务端数据库；模型只收到有效历史、已选资料元数据及本轮实际读取的片段。
 
-内部访问口令与真实 API 密钥在目标服务器 `.env.internal` 中配置，修改后重启内测服务。本地环境文件不代表服务器当前配置。环境文件和 SQLite 不提交 Git。不得在前端设置 VITE 模型密钥。
+| 路径 | 用途 |
+|---|---|
+| src/ui | 聊天、消息操作、题板、资料目录、来源和主题 |
+| src/session | 历史上下文、编辑版本、本机持久化与恢复 |
+| src/agent | Pi 调度、模型流、取消和轮次限制 |
+| src/tools | Worker 解析、资料读取、Skill、引用与题目校验 |
+| src/contracts | app.v1 业务类型、模型事件与校验 |
+| prompts、skills | 系统提示与白名单教学内容的源文件 |
+| server | Go/Gin API、旧站适配与 SQLite 记账 |
+| scripts/acceptance | 有预算账本的真实模型验收 |
+| tests | 单元测试和浏览器回归 |
 
-```sh
+## 本地开发
+
+需要 Node.js >=22.19、npm 和 Go >=1.22。以下命令在项目根目录执行。
+
+~~~sh
 npm ci --no-audit --no-fund
-npm test
-npm run build
-cd server
-GOMAXPROCS=1 GOMEMLIMIT=256MiB go test ./...
-GOMAXPROCS=1 GOMEMLIMIT=256MiB go build -p 1 -o bin/cramameleon .
-cd ..
-sh scripts/internal.sh start
-```
+cp .env.internal.example .env.internal
+~~~
 
-Go 服务使用 `APP_ENV=internal` 并监听 loopback。访客模式可经同机反向代理开放，代理需保留 Host，并写入可信的 X-Forwarded-For。访客记录保存在当前浏览器的独立记录区。内部模式的应用会话有效 8 小时，SQLite 保存 token 哈希。更改开发者 ID 后旧身份会话失效，本地记录按新身份隔离。
+编辑 .env.internal，设置至少 24 字符的随机 APP_ACCESS_TOKEN；需要真实问答时填写 DEEPSEEK_API_KEY。环境文件不会自动由 Go 加载，需要注入进程。Bash 中启动后端：
 
-服务器路径为 `/home/ubuntu/cramameleon`。通过 SSH 转发访问：
-```sh
-ssh -N -L 127.0.0.1:18085:127.0.0.1:18085 zzs
-```
-打开 http://127.0.0.1:18085 。内部模式下需输入环境文件中的访问口令。更改密钥或预算后：
-```sh
-sh scripts/internal.sh stop
-sh scripts/internal.sh start
-```
+~~~sh
+set -a
+. ./.env.internal
+set +a
+(cd server && go run .)
+~~~
 
-此次服务器交付使用 `APP_STATIC_DIR=var/app-dist`，保留旧 `dist` 与旧 Demo 二进制以便回退；后续本机构建需把 dist 同步至这个配置目录，或调整 APP_STATIC_DIR。进程日志在 `var/log/internal.log`。脚本校验 PID 对应二进制后才停止进程。尚未配置 systemd，重启主机后需手动启动。
+另开终端启动前端：
 
-### 线上自动部署
+~~~sh
+npm run dev
+~~~
 
-线上部署跟随 `main`。每次推送后，GitHub Actions 用仓库的短期只读令牌触发腾讯云上的 `~/.local/bin/cramameleon-deploy-main`。服务器拉取 `main`，在独立目录构建，通过健康检查后保留新版本。切换失败时恢复上一版。只有后端代码变动时才重启 PM2 进程。
+访问 Vite 输出的本地地址，/api 代理到 127.0.0.1:18085。在输入区用内部口令建立应用会话。PowerShell 可用 $env:变量名 设置同一组进程环境变量，再进入 server 执行 go run .。
 
-- 在 GitHub Actions 的 **Deploy main** 查看日志，也可以从那里手动触发。
-- 仓库保存三个 Actions secrets，分别用于 SSH 目标、仅允许执行部署命令的密钥，以及服务器主机公钥。服务器用现有 PM2 配置运行应用。
-- 如果服务器访问 GitHub 需要代理，可在服务端启动部署脚本时设置 `CRAMAMELEON_GIT_PROXY`。该设置只作用于 Git 拉取。
-- 修改 [部署脚本](scripts/deploy-main.sh) 后，需要同步更新服务器上的安装副本。
+模型未配置时仍可导入、查看资料和恢复记录，发送及重试会禁用；配置后可用“重新检查模型状态”恢复。APP_ALLOW_GUEST=1 仅用于 internal 模式的免口令访问，不能绕过 old-site 模式的账号准入。
 
-## 契约与行为
+生产前端构建使用 npm run build；Go 直接服务静态产物时，默认 APP_STATIC_DIR=dist。构建会生成教学内容模块并复制 PDF.js 本地资源，部署必须包含完整 dist。
 
-`src/contracts` 是 `app.v1` 的业务类型及模型事件校验，Go DTO 在 `server/model.go` 对齐。模型请求包含 requestId、turnId、sessionId、完整 messages 和白名单 tools；不接收客户端模型名、密钥、上游 URL 或费用限额。
+## 旧站授权与配置
 
-- `AgentInput`：动作、当前会话有效历史、选中文档、偏好/进度和 AbortSignal。
-- `AgentEvent`：文字、工具状态、题目、来源、资料候选、文档、学习状态、用量、错误和唯一终态。
-- `PiAgentAdapter` 是唯一 Agent 实现；自动化测试通过注入可控模型响应验证同一套真实 Pi 调度、业务校验与事件协议。
-- 仅将当前会话已完成或等待用户操作的有效问答对送入模型，保留最近完整对，默认历史最多 12000 字符/30 条消息。失败/中断回答不进入历史。
-- 重试通过回答的 `replyTo` 关联原问题（兼容旧记录的相邻消息），保留原用户消息、替换未完成回答；失败、停止、中断和达到上限的回答不进入模型历史，本轮问题只发送一次。
-- 停止立即保留已有文字、题目和来源并释放界面；旧轮次的迟到事件和清理不再改变记录或后续轮次。刷新时保存中的轮次显示为已中断，可重试。
-- 模型返回 `AUTH_REQUIRED` 或应用会话检查返回 401 时，返回内部口令入口，有效访问恢复前不能发送业务请求。本机记录仍尝试保存；同用户授权成功后沿用当前内存记录，即使保存失败也恢复访问，并明确提示未保存与刷新风险。切换用户前必须保存原身份记录；保存失败时保留原记录、说明授权成功但暂不能切换，并引导原用户重新进入。各用户分别读取自己的学习会话，旧应用会话查询结果不能恢复已撤销的访问或切换当前身份。首次读取存储失败时不写回，避免覆盖未读到的旧记录。
-- 网络失败、回答传输中断、今日模型额度不足和请求并发限制分别给出恢复提示；输出上限显示“达到上限”并保留部分结果。额度不足请等北京时间次日恢复，并发限制请稍后重试；模型未配置时发送及重试均禁用。联系维护者配置模型后，点击“重新检查模型状态”查询现有应用会话，不调用模型；就绪后再点击“重试”提交一次原问题。检查中的 401 和过期响应沿用应用会话恢复保护。
-- 可见输出后的原生流读取异常由 `modelStream.ts` 归为 `MODEL_STREAM_INTERRUPTED`（B [#14](https://github.com/dormitory604/cramameleon/issues/14) 的修复 `6e0a83a` 已合入集成分支），界面显示传输中断并保留已收到的内容；对应浏览器回归不再带 `test.fail` 标记，#8 不再受 #14 阻塞。
-- 可在聊天中说明会话偏好，用户当前指令优先。concept/review/exam 教学 Skill、课程/章节/进度、会话与单轮偏好已接入。简单问题直接回答，明确教学请求按需读取 Skill。
-- 题目通过 `present_quiz` 工具完整返回并校验。支持自编题，以及有已读资料来源的改编题/原题；原题必须核对题干和选项。每轮最多一道题，最多修复一次，再失败退回讲解；作答或看答案不发模型请求。
-- 默认每轮 6 次工具/120 秒，另外最多 7 次模型请求；取消、终止后丢弃迟到事件。
-- 本机数据使用 `cramameleon` IndexedDB，按真实内部用户 ID 分区，保存消息、题目/作答、资料文本与勾选、偏好、学习位置和当前学习会话。界面区分保存中、已保存和失败；读写失败可重试，读取成功前禁用修改。若恢复副本可读但回写失败，会展示“已恢复、尚未保存”的内容，仍可移除资料、删除对话并重试保存。旧 `cramameleon-demo` 数据保留但不自动混入真实学习历史。
-- 正常退出等待最新记录提交，等待时锁定编辑；保存失败会保留学习空间，并提供“仍然退出（可能丢失修改）”。主动选择后会尽量保留当前用户的本机恢复副本，撤销应用会话并清空界面，其他用户进入不会混入这些记录。
-- 刷新/离开前尝试将未提交记录写入同用户的 localStorage 恢复副本；副本不可写（例如配额已满）时，触发浏览器原生离开确认，取消后可继续编辑保存。实际 pagehide 会中断、取消当前轮次并丢弃迟到结果，返回后可以重试。请等到“已保存”再离开；强制关闭、浏览器未触发生命周期事件或忽略确认继续离开仍可能丢失未提交修改。尚不支持多个标签页并发编辑的冲突合并。当前回归与限制（含受控生命周期事件验证，未声称实际 BFCache 命中）见 [Issue #9 学习记录验收](docs/Issue-9-学习记录验收.md)。
-- `search_context` 按关键词检索，`read_context` 从指定文本块开始顺序阅读（默认从开头），两者仅处理当前已选且已解析的文本，共享每轮读取预算。`cite_sources` 只能引用本轮实际读到的块。旧站资料经用户确认读取并在浏览器解析后，与本地文件一样可供 Agent 阅读；工具不会自动下载或扣旧站额度。
+正式模式使用 [.env.old-site.example](.env.old-site.example)，将变量注入后端进程；本地内部模式使用 [.env.internal.example](.env.internal.example)。两种模式的会话入口不同，旧站模式不开放内部口令登录接口。
+
+| 配置 | 含义 |
+|---|---|
+| APP_ENV | internal 或 old-site，默认 internal |
+| APP_BIND | 仅允许 loopback，默认 127.0.0.1:18085 |
+| APP_STATIC_DIR、APP_DATABASE_PATH | 静态目录、SQLite 路径，默认 dist、var/app.sqlite |
+| APP_PUBLIC_URL、OLD_SITE_URL | 新站公网 origin、固定旧站地址；old-site 模式必填 |
+| OLD_SITE_CLIENT_ID、OLD_SITE_CLIENT_SECRET | 两个后端专用集成身份与秘密 |
+| APP_CREDENTIAL_KEY | 旧站凭据加密密钥，32 字节，配置为 64 位十六进制 |
+| APP_ALLOWED_OLD_USER_IDS | 允许进入的旧站数字用户 ID，逗号分隔，不能为空 |
+| APP_ACCESS_TOKEN、APP_DEVELOPER_ID | 内部模式口令与本机记录对应身份 |
+| DEEPSEEK_API_KEY、DEEPSEEK_MODEL | 服务端模型密钥和唯一允许模型名，模型默认 deepseek-flash |
+| APP_DAILY_TOKEN_BUDGET | 全局每日输入、输出 token 合计上限；代码默认 1,000,000，部署模板可覆盖 |
+| APP_MAX_OUTPUT_TOKENS、APP_MAX_INPUT_BYTES | 单次模型输出 token 上限、请求体字节上限，默认 2048、64000 |
+
+旧站流程使用单次授权码、浏览器绑定 state、S256 PKCE 和固定回调，服务端兑换后建立 8 小时应用会话。准入名单按每次请求重新核对。资料凭据失效与应用会话失效分别处理；旧站暂不可用时，有效应用会话仍可使用本地与缓存资料。
+
+名单、密钥和部署环境文件由服务器私有配置管理，修改后重启进程。不要把邮箱、昵称或前端参数当作可信身份，也不要设置 VITE 模型密钥。详细接入与下载规则见 [旧站身份与课程资料接入](docs/旧站身份与资料接入-2026-11-05.md)。
+
+## 资料阅读与引用
+
+从“添加”导入本地文件，或在已授权的旧站会话中选择“搜索课程资料”。搜索和查看目录免费；用户确认读取后才请求文件，课程包先选条目。入口携带的资料 ID 只打开对应目录，不自动下载。下载权益、周期与扣次由旧站判定，取消或解析失败不会自动退回已扣额度；同一读取请求重试复用回执。本机已有缓存的资料可直接复用。
+
+导入并勾选后，Agent 可使用：
+
+| 工具 | 行为 |
+|---|---|
+| search_context | 按关键词搜索当前已选且已解析的文本 |
+| read_context | 从指定文本块顺序阅读；省略 startChunk 时从开头读，按 nextChunk 续读 |
+| cite_sources | 引用本轮实际读到的块，位置和原站链接取自缓存元数据 |
+| read_skill | 读取 concept、review、exam 中的已发布教学方法 |
+| update_learning_state | 记录实际学习位置与用户偏好 |
+| present_quiz | 校验并展示一道完整单选题 |
+
+标题和目录不等于已读正文。两种读取工具共用每轮 8000 字符预算，单次至多 6000；预算耗尽会返回 budgetExhausted。Agent 工具不下载旧站文件、不扣下载次数、不访问任意网页。取消勾选或移除资料后，涉及该资料的旧问答不再进入本轮模型历史，但界面记录仍保留。
+
+来源窗口区分“本轮读取片段”和缓存原文，可查看真实页码、幻灯片或段落。PDF/PPTX 可以保留实际页/张号；DOCX 不推测页码。没有足够证据时应说明缺口，不能从文件名猜题目或考试范围。
+
+## 限制与恢复
+
+- 支持 TXT、Markdown、文本 PDF、DOCX、PPTX；本地 ZIP 先选目录条目再解析。单文件 20 MiB；ZIP 展开最多 100 MiB、200 条，拒绝嵌套、加密、多卷和 ZIP64。
+- 每对话最多 20 份资料；每份最多 200 万字符、1000 文本块，PDF/PPTX 最多 1000 页/张。扫描件不做 OCR，图片、公式对象和复杂布局可能缺失；按界面解析警告核对原文。
+- 默认每轮 6 次工具调用、最多 7 次模型请求、120 秒；每轮最多一道单选题，题目校验最多修复一次。
+- 历史最多 12000 字符、30 条消息，按完整问答对裁剪并保留当前题目的必要记录；失败和中断回答不进入模型历史。
+- 模型全局并发 2，单用户或访客 IP 并发 1；相同 requestId 不会重复请求上游，不自动重试付费请求。全站累计 token 上限为 100,000,000。
+- 预算按请求开始时的北京时间自然日归属。发起前保守预留，有可信 usage 后结算；中断而无可信用量时保留预留，SQLite 跨重启保留记账。
+- 停止会保留已有文字、题目与来源；刷新后未完成轮次标为中断，可重试。旧轮次迟到结果不能修改新轮次。
+- 本机记录按用户隔离，读写失败提供重试；读取成功前不覆盖旧记录。正常退出等待保存，刷新/离开时尽量写入恢复副本。强制关闭或忽略保存失败提示仍可能丢失未保存内容。
+- 当前不提供 OCR、旧 DOC/PPT 转换、跨设备同步、多标签并发编辑冲突合并、错题库、后台学习任务或开放网页搜索。
 
 ## API
 
-| 接口 | 行为 |
+| 接口 | 用途 |
 |---|---|
-| GET /api/health | 运行状态、契约版本、模型配置就绪状态 |
-| POST /api/internal/session | 校验内部访问口令，建立 HttpOnly 应用会话 |
-| GET /api/session | 访客或内部会话信息、模型就绪状态、限制、今日全局用量 |
-| POST /api/logout | 撤销应用会话 |
-| POST /api/model | 单次模型转发，POST fetch 消费 SSE |
+| GET /api/health | 运行状态、契约版本、模型就绪状态 |
+| GET /api/auth/config | 当前进入方式和旧站入口 |
+| GET /api/auth/old-site/start、callback | 旧站模式授权发起、回调 |
+| POST /api/internal/session | 内部模式口令授权 |
+| GET /api/session、POST /api/logout | 查询、撤销本应用会话 |
+| POST /api/model | 单次模型流转发，POST fetch 消费 SSE |
+| GET /api/old-site/quota | 旧站下载权益 |
+| GET /api/old-site/materials、packages | 搜索；在资源 ID 后查询详情、课程包 items 目录 |
+| POST /api/old-site/materials/:id/access、packages/:id/access | 用户确认的读取授权与幂等回执 |
+| GET /api/old-site/materials/:id/content、packages/:id/items/:itemId/content | 按读取授权取得文件字节 |
 
-旧 `/api/demo/session` 已删除。主要错误码：AUTH_REQUIRED、MODEL_NOT_CONFIGURED、BUDGET_EXCEEDED、TOTAL_BUDGET_EXCEEDED、CONCURRENCY_LIMIT、DUPLICATE_REQUEST、CONTEXT_TOO_LARGE、MODEL_AUTH_FAILED、MODEL_BALANCE、MODEL_RATE_LIMIT、MODEL_TIMEOUT、MODEL_STREAM_INTERRUPTED、MODEL_OUTPUT_LIMIT、STORAGE_FAILED。
-
-预算在请求上游前，以请求 UTF-8 字节数+4096协议开销+输出上限保守预留；成功后按官方 usage 结算。断开/超时/崩溃而无可信 usage 时保留全部预留，不把未知消费当零。每日额度按请求开始日归属。全站累计上限为 1 亿 token，历史用量与未结算预留均计入，预算记录跨重启保存在同一 SQLite 数据库。全局并发为 2，内部模式每用户最多 1 个并行请求，访客模式每客户端 IP 最多 1 个。相同 requestId 不会重复请求上游，手动重试必须使用新 ID。服务只记录请求 ID、状态、耗时和 token 数，不记录聊天、课件或密钥。不自动重试付费请求。
+业务接口要求有效应用会话；旧站资料请求绑定当前用户，后端只转发固定旧站和白名单路径。常见错误包括 AUTH_REQUIRED、ENTRY_NOT_ALLOWED、MATERIAL_AUTH_EXPIRED、QUOTA_EXCEEDED、MODEL_NOT_CONFIGURED、BUDGET_EXCEEDED、TOTAL_BUDGET_EXCEEDED、CONCURRENCY_LIMIT、MODEL_STREAM_INTERRUPTED、MODEL_OUTPUT_LIMIT 和 STORAGE_FAILED。
 
 ## 验证
 
-```sh
+~~~sh
 npm test
+npm run typecheck
 npm run build
-cd server && go test ./... && go vet ./...
-# 在项目根目录：
+(cd server && go test ./... && go vet ./...)
 npx playwright install chromium
-npx playwright test
-TEST_PRODUCTION=1 npx playwright test
-```
+npm run test:e2e
+TEST_PRODUCTION=1 npm run test:e2e
+~~~
 
-浏览器测试默认使用端口 18086。本次 Issue #9 评审修复在隔离配置中把服务器和 baseURL 统一到 18111，并使用 `--strictPort`，避开其他任务；标准命令可在独立检出目录直接运行，不依赖临时工作树。最终结果为 24 项模块测试、22 项开发浏览器测试、22 项生产浏览器测试全部通过，构建通过。临时端口配置的可移植示例及验证边界见 [Issue #9 学习记录验收](docs/Issue-9-学习记录验收.md)。
+浏览器测试使用真实界面、Pi 调度、工具、Worker 和 IndexedDB，在模型及旧站 HTTP 边界使用可控响应，不消耗真实模型或下载额度。默认端口 18086；生产产物测试需先构建。可用 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定已有 Chrome 路径；PowerShell 用 $env:TEST_PRODUCTION='1' 设置生产测试模式。
 
-也可通过 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定已有 Chrome 路径。浏览器测试使用可控模型响应，覆盖访客入口、流式 Markdown 和公式、会话隔离、重试去重、题板反馈、恢复/删除和模型未配置；`tests/e2e/recovery.spec.ts` 另覆盖真实 PiAgentAdapter 的停止与迟到流、失败/中断/上限重试、错误恢复、应用会话失效与同用户/跨用户重新进入，以及手机关键恢复操作。Go 测试验证协议转换、分片工具参数、权限、取消和持久预算。新阶段真实模型验收已通过 12 个用例，覆盖简单问答、教学 Skill、复习范围与续接、出题、临时偏好及已解析资料的引用与注入防护，详见 [教学执行验收](docs/Agent教学执行验收-2026-11-04.md)。第 4 部分的六种格式、ZIP 目录选择、取消/错误、缓存隔离与真实模型闭环结果见 [本地资料闭环验收](docs/本地资料闭环验收-2026-11-04.md)。
+tests 中保留协议、教学、资料解析/范围/引用、预算、会话恢复、旧站入口、消息编辑、主题和设备键盘等回归。真实模型验收统一使用有累计预算账本的入口，参见 [验收说明](scripts/acceptance/README.md)；普通回归不会发起真实付费调用。
 
-#8 的存储写入失败、初始存储不可用、模型就绪恢复、停止后的迟到流及可见输出后的流中断均由 `tests/e2e/recovery.spec.ts` 覆盖；#14 合入后已移除预期失败标记。最新全量结果见 [本地学习闭环交付报告](docs/Issue-12-本地学习闭环交付报告.md)，其中注明了规格 #4 评审修复后尚未重跑。详见 [#8 停止与会话恢复验收](docs/停止与会话恢复验收-issue-8.md)。
+## 部署
 
-实现依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/) 与 [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/)。
+[Deploy main](.github/workflows/deploy-main.yml) 在 main 推送或手动触发时通过受限 SSH 命令执行 [deploy-main.sh](scripts/deploy-main.sh)。脚本拉取 main、独立构建、切换发布目录并检查服务与静态首页；失败恢复上一版本，仅后端变化时重启 PM2。B 分支推送不会触发此工作流。
 
-教学提示词与 Skill 参考 DeepTutor v1.7.1 的源码，按本项目的工具、资料引用和单题交互契约重新编写。实际参考文件、固定提交链接及适配说明见 [DeepTutor 教学提示词参考](docs/DeepTutor教学提示词参考.md)。
+部署需要事先配置 PM2、发布目录、私有环境文件和工作流使用的 SSH secrets。脚本默认项目目录为服务器用户的 ~/cramameleon，可用 CRAMAMELEON_ROOT 覆盖；修改仓库脚本后也需同步服务器安装副本。服务端 Git 代理可用 CRAMAMELEON_GIT_PROXY 配置。
 
-## 本地资料使用与验收
-
-在当前对话的“本地资料”中导入 TXT、Markdown、文本 PDF、DOCX、PPTX；ZIP 先勾选目录条目，再解析。文件仅在浏览器 Worker 中处理，缓存文本与元数据，不保存原始文件。导入不调用模型；发送问题后仅检索选中资料并提交必要片段。点来源按钮可查看真实页码、幻灯片或段落，并切换缓存文本块。
-
-单文件 20MB；ZIP 展开最多 100MB、200 条，禁止嵌套压缩包，不支持加密、多卷和 ZIP64。每会话最多 20 份资料；每份最多 200 万字、1000 文本块，PDF/PPTX 最多 1000 页/张。DOCX 不推测页码，扫描件不做 OCR；公式对象、图表与复杂布局可能无法完整提取，界面会展示解析警告。导入超时两分钟可重新选择或拆分文件，停止导入会终止 Worker。
-
-生产构建会复制 PDF.js 的本地 CMap 和标准字体；部署时须同步完整 dist（包括 assets 和 pdfjs）。首次使用需加载解析资源，已导入的文本可离线查看。
-
-生产产物回归：先 npm run build，再设置 TEST_PRODUCTION=1 并运行 npm run test:e2e。真实付费资料闭环验收需已有 18085 SSH 转发和本地 .env.internal 内部访问口令，设置 RUN_LIVE_MATERIALS=1，执行 npx playwright test --config playwright.live.config.ts。该验收使用自编材料和独立浏览器上下文，结果在 .preflight/materials-live.json。
-
-教学验收（预算受控）：`node --experimental-strip-types scripts/acceptance-teaching.ts --live` 运行 12 项教学用例（用例标识与 docs/evidence/teaching-acceptance-2026-11-04.json 一致）。本阶段默认 `--phase spec-4 --limit 30000`，累计记录在只追加账本 `.preflight/acceptance-budget/spec-4.jsonl`，本次报告在 `.preflight/teaching-acceptance-spec-4.json`；可用 `--ledger`、`--report` 指定其他路径。每次 /api/model 请求发出前按“请求体 UTF-8 字节数 + 512”输入上界加服务端输出上限预留，收到可信用量后结算；流中断、取消、5xx 或进程被杀时保留预留并在报告中标注。剩余额度或服务端当日额度不足以覆盖下一次预留时在请求发出前停止。中断后用同一账本再次执行即继续累计，`--skip-completed` 跳过上次已通过的用例，`--only a,b` 只跑指定用例（自动补上前置用例），`--status` 不联网查看账本累计值。上方真实资料闭环验收不经过该预算守卫。
+保留服务端 SQLite 和当前私有配置，回滚程序不能回滚新产生的用量与下载记录。scripts/internal.sh 是 Linux 内部联调的启动辅助工具，通过 CRAM_ENV_FILE 选择环境文件；正式部署流程使用上述 PM2 发布脚本。

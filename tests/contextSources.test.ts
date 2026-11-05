@@ -5,6 +5,13 @@ import { attributeRemoteDocument } from '../src/tools/oldSiteMaterials.ts';
 import { ContextSources } from '../src/tools/contextSources.ts';
 import type { Document } from '../src/contracts/index.ts';
 
+test('repeated searches preserve the longest evidence already read for a citation', () => {
+  const doc: Document = { id: 'long', title: '长讲义', warnings: [], chunks: Array.from({ length: 6 }, (_, index) => ({ documentId: 'long', chunkId: 'c' + index, title: '长讲义', location: '段落 ' + (index + 1), text: '条件概率：' + String(index).repeat(1795) })) };
+  const sources = new ContextSources([doc]);
+  sources.search('条件概率'); sources.search('条件概率');
+  assert.equal(sources.resolve([{ documentId: doc.id, chunkId: 'c1' }])[0].text.length, 1800);
+});
+
 test('old-site content is readable in order without a keyword match and retains source identity', async () => {
   const local = await parseLocalBytes('小测.txt', new TextEncoder().encode('1. 设 A、B 互斥，求并集概率。\n\n2. 求数学期望。'), async () => { throw Error('not PDF'); });
   const doc = attributeRemoteDocument(local, { id: '5232', kind: 'material', title: '概率论与数理统计 2024小测题', courseName: '概率论', format: 'txt', size: 100, url: 'https://materials.example.com/material/5232', availability: 'available', alreadyDownloaded: true });

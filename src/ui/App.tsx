@@ -29,7 +29,7 @@ const recoveryErrors: Record<string, string> = {
   MODEL_NOT_CONFIGURED: '模型尚未配置，请联系维护者配置模型，然后点击“重新检查模型状态”；就绪后可重试原问题。',
 };
 
-// Select complete turns at A's submission boundary; visible records remain intact.
+// Select complete turns whose material scope is still available; visible records remain intact.
 function scopedMessages(messages: ChatMessage[], conversationId: string, selectedIds: string[], retryUserId?: string): ChatMessage[] {
   const selected = new Set(selectedIds);
   const current = messages.filter(message => (message.conversationId ?? LEGACY_CONVERSATION_ID) === conversationId);
@@ -80,8 +80,8 @@ export function App() {
   const active = useRef<{ id: string; conversationId: string; controller: AbortController } | null>(null);
   const accessValid = useRef(false);
   const sessionGeneration = useRef(0);
-  // Records stay owned by the session user across an expiry (#8) and are
-  // replaced only when another user enters or the user exits (#9).
+  // Records stay owned by the session user across an expiry and are
+  // replaced only when another user enters or the user exits.
   const { messages, setMessages, states, setStates, materials, setMaterials, conversationId, setConversationId, loaded, storageStatus, storageFailed, readFailed, retryStorage, flush, preserveRecovery } = useLocalRecords(appSession?.user.id, () => {
     // Invalidate before abort: even a late terminal event belongs to the old turn.
     detachActiveTurn();
@@ -93,7 +93,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState('');
   const chat = useRef<HTMLElement>(null);
-  // Follow new output only while the learner is at the bottom; reading history pauses it (#10).
+  // Follow new output only while the learner is at the bottom; reading history pauses it.
   const following = useRef(true);
   const textarea = useRef<HTMLTextAreaElement>(null);
 
@@ -201,7 +201,7 @@ export function App() {
     channel.postMessage({type:'identity',userId});return()=>{channel.close();authChannel.current=null;};
   },[appSession?.user.id,authenticated]);
   useEffect(() => {
-    // A user change or exit resets transient UI; a same-user expiry keeps it (#8).
+    // A user change or exit resets transient UI; a same-user expiry keeps it.
     detachActiveTurn();
     setImporting(false); setInput(''); setSource(null); setQuery(''); setExitRisk(false);
   }, [appSession?.user.id]);
@@ -235,7 +235,7 @@ export function App() {
       accessValid.current = true;
       setAppSession(data); setAccessToken('');
       setAuthenticated(true);
-    } catch (error) { setNotice(error instanceof Error ? error.message : '模拟授权失败'); }
+    } catch (error) { setNotice(error instanceof Error ? error.message : '授权失败，请重试。'); }
     finally { setAuthBusy(false); }
   }
   async function logout(exitAnyway = false) {
@@ -272,7 +272,7 @@ export function App() {
     const userMessageId = edit?.message.id ?? retryMessage?.replyTo ?? crypto.randomUUID();
     const documents = (materials[conversationId]?.documents ?? []).filter(d => materials[conversationId]?.selectedIds.includes(d.id));
     const selectedMaterialIds = documents.map(d => d.id);
-    // #6 selects material-compatible complete turns; #7 then projects quiz records within budget.
+    // Filter by material scope, then project quiz records within the history budget.
     const history = buildLearningHistory(scopedMessages(edit?.prefix ?? messages, conversationId, selectedMaterialIds, retryMessage ? userMessageId : undefined), conversationId);
     const initialState = edit ? edit.message.learningStateBefore ?? { preferences: '', progress: '' } : states[conversationId] ?? { preferences: '', progress: '' };
     let modelNotConfigured = false;
@@ -477,4 +477,3 @@ export function App() {
     {authenticated && source && loaded && <SourceViewer source={source} document={sourceDocument} onClose={()=>setSource(null)}/>}
   </div>;
 }
-// TODO(ui): Full accessibility pass.

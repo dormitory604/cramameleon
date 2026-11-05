@@ -93,7 +93,7 @@ func TestDailyTokenBudgetConfig(t *testing.T) {
 	}
 }
 
-func TestAuthorizationAndNoDemo(t *testing.T) {
+func TestInternalAuthorizationAndUnknownRoutes(t *testing.T) {
 	_, srv, client := setup(t)
 	code, _ := post(t, srv, client, request("unauth"))
 	if code != 401 {
@@ -114,9 +114,16 @@ func TestAuthorizationAndNoDemo(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	var missing struct{ Error struct{ Code string } }
+	if e = json.NewDecoder(r.Body).Decode(&missing); e != nil {
+		t.Fatal(e)
+	}
 	r.Body.Close()
 	if r.StatusCode != 404 {
 		t.Fatal("demo route remains")
+	}
+	if missing.Error.Code != "NOT_FOUND" {
+		t.Fatal(missing.Error.Code)
 	}
 	r, e = client.Post(srv.URL+"/api/logout", "application/json", nil)
 	if e != nil {

@@ -189,7 +189,7 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	} else {
 		r.POST("/api/internal/session", func(c *gin.Context) {
 			if s.mode() == "guest" {
-				fail(c, 404, "NOT_IMPLEMENTED", "访客模式无需访问口令")
+				fail(c, 404, "NOT_FOUND", "访客模式无需访问口令")
 				return
 			}
 			s.loginMu.Lock()
@@ -251,7 +251,7 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	api.POST("/old-site/*path", s.materials)
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			fail(c, 404, "NOT_IMPLEMENTED", "此接口尚未实现")
+			fail(c, 404, "NOT_FOUND", "接口不存在")
 			return
 		}
 		if c.Request.Method != http.MethodGet {

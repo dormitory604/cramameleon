@@ -80,7 +80,6 @@ export class PiAgentAdapter implements AgentRunner {
   const completion=(async()=>{
    try{
     if(!this.config.modelReady)throw new AppError('MODEL_NOT_CONFIGURED','服务器尚未配置真实模型');
-    if(input.action.type==='confirm_materials'&&input.action.ids.some(id=>!input.documents.some(d=>d.id===id)))throw new AppError('MATERIALS_NOT_READY','所选资料尚未解析，请先提供可用文本块');
     if(!input.signal.aborted)await agent.prompt(actionText(input.action));
    }catch(error){if(!input.signal.aborted&&!limited)failed=error instanceof AppError?error:new AppError('AGENT_FAILED',error instanceof Error?error.message:'运行失败');}
    finally{
