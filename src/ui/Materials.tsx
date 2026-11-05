@@ -20,10 +20,10 @@ export function MaterialComposer({session, scope, disabled, onChange, onBusy, on
  const [remoteOpen, setRemoteOpen] = useState(false);
  const [entryContext,setEntryContext]=useState<AppSession['initialContext']>();
  useEffect(()=>{
-  if(session?.mode!=='old-site'||!session.initialContext||!Object.keys(session.initialContext).length)return;
+  if(session?.mode!=='old-site'||!session.initialContext||(!session.initialContext.materialId&&!session.initialContext.packageId))return;
   const key=`cram-entry:${session.user.id}:${JSON.stringify(session.initialContext)}`;
   if(sessionStorage.getItem(key))return;
-  sessionStorage.setItem(key,'1');setEntryContext(session.initialContext);setRemoteOpen(true);
+  if(!session.initialContext.importId)sessionStorage.setItem(key,'1');setEntryContext(session.initialContext);setRemoteOpen(true);
  },[session?.user.id]);
  const [menuOpen, setMenuOpen] = useState(false);
  const [dragging, setDragging] = useState(false);
@@ -177,7 +177,10 @@ export function MaterialComposer({session, scope, disabled, onChange, onBusy, on
    {actions}
   </div>
   {dragging && !locked && <div className="composer-drop-hint" aria-hidden="true">松开以添加文件</div>}
-  {remoteOpen&&session?.mode==='old-site'&&<RemoteMaterials session={session} documents={scope.documents} onBusy={onBusy} onClose={()=>{setRemoteOpen(false);setEntryContext(undefined);}} initial={entryContext} onImport={incoming=>{
+  {remoteOpen&&session?.mode==='old-site'&&<RemoteMaterials session={session} documents={scope.documents} onBusy={onBusy} onClose={()=>{
+   if(entryContext?.importId)sessionStorage.setItem(`cram-entry:${session.user.id}:${JSON.stringify(entryContext)}`,'1');
+   setRemoteOpen(false);setEntryContext(undefined);
+  }} initial={entryContext} onImport={incoming=>{
    const documents=[...scope.documents],selectedIds=new Set(scope.selectedIds);
    for(const doc of incoming){const index=documents.findIndex(d=>d.id===doc.id);if(index>=0)documents[index]=doc;else documents.push(doc);selectedIds.add(doc.id);}
    onChange({documents,selectedIds:[...selectedIds]});

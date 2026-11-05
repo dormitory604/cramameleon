@@ -99,7 +99,7 @@ npm run dev
 
 ## 资料阅读与引用
 
-从“添加”导入本地文件，或在已授权的旧站会话中选择“搜索课程资料”。搜索和查看目录免费；用户确认读取后才请求文件，课程包先选条目。入口携带的资料 ID 只打开对应目录，不自动下载。下载权益、周期与扣次由旧站判定，取消或解析失败不会自动退回已扣额度；同一读取请求重试复用回执。本机已有缓存的资料可直接复用。
+从“添加”导入本地文件，或在已授权的旧站会话中选择“搜索课程资料”。搜索和查看目录免费。从破壁计划资料页点击「用 Cramameleon 复习」会自动导入支持的资料，超出当前对话容量时打开目录供选择。通过搜索添加时，选择资料后确认读取。下载权益、周期与扣次由旧站判定，取消或解析失败不会自动退回已扣额度；同一读取请求重试复用回执。本机已有缓存的资料可直接复用。
 
 导入并勾选后，Agent 可使用：
 
@@ -135,12 +135,13 @@ npm run dev
 | GET /api/health | 运行状态、契约版本、模型就绪状态 |
 | GET /api/auth/config | 当前进入方式和旧站入口 |
 | GET /api/auth/old-site/start、callback | 旧站模式授权发起、回调 |
+| POST /api/auth/old-site/start | 破壁计划资料页提交导入意图并发起授权 |
 | POST /api/internal/session | 内部模式口令授权 |
 | GET /api/session、POST /api/logout | 查询、撤销本应用会话 |
 | POST /api/model | 单次模型流转发，POST fetch 消费 SSE |
 | GET /api/old-site/quota | 旧站下载权益 |
 | GET /api/old-site/materials、packages | 搜索；在资源 ID 后查询详情、课程包 items 目录 |
-| POST /api/old-site/materials/:id/access、packages/:id/access | 用户确认的读取授权与幂等回执 |
+| POST /api/old-site/materials/:id/access、packages/:id/access | 资料读取授权与幂等回执 |
 | GET /api/old-site/materials/:id/content、packages/:id/items/:itemId/content | 按读取授权取得文件字节 |
 
 业务接口要求有效应用会话；旧站资料请求绑定当前用户，后端只转发固定旧站和白名单路径。常见错误包括 AUTH_REQUIRED、ENTRY_NOT_ALLOWED、MATERIAL_AUTH_EXPIRED、QUOTA_EXCEEDED、MODEL_NOT_CONFIGURED、BUDGET_EXCEEDED、TOTAL_BUDGET_EXCEEDED、CONCURRENCY_LIMIT、MODEL_STREAM_INTERRUPTED、MODEL_OUTPUT_LIMIT 和 STORAGE_FAILED。

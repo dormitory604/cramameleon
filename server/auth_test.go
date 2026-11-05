@@ -368,7 +368,7 @@ func TestOldSitePublicAccessAndBetaSwitch(t *testing.T) {
 	if _, e := f.s.store.db.Exec("UPDATE app_users SET issuer='https://untrusted.example'"); e != nil {
 		t.Fatal(e)
 	}
-	if status, _ := f.session(t); status != 403 {
+	if status, _ := f.session(t); status != 401 {
 		t.Fatal("public mode accepted an untrusted identity issuer", status)
 	}
 }
@@ -441,5 +441,54 @@ func TestAccountSwitchRejectsStaleTabBeforeModelOrLogout(t *testing.T) {
 	}
 	if code, _ := f.session(t); code != 200 {
 		t.Fatal("stale tab logged out new user")
+	}
+}
+
+func TestAutomaticImportRequiresOldSiteForm(t *testing.T) {
+	f := oldAuth(t)
+	const path = "/api/auth/old-site/start"
+	for _, origin := range []string{"", "https://untrusted.example", f.s.cfg.oldSite.publicURL, f.old.URL} {
+		req, err := http.NewRequest(http.MethodPost, f.app.URL+path, strings.NewReader("materialId=12"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", origin)
+		r, err := f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if origin != f.old.URL {
+			if r.StatusCode != 403 {
+				t.Fatalf("origin %q received %d", origin, r.StatusCode)
+			}
+			continue
+		}
+		if r.StatusCode != 303 {
+			t.Fatal(r.StatusCode)
+		}
+		redirect, err := url.Parse(r.Header.Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := redirect.Query()
+		if q.Get("context") != `{"materialId":"12"}` {
+			t.Fatal("unexpected authorization context", q.Get("context"))
+		}
+		f.mu.Lock()
+		f.challenge = q.Get("code_challenge")
+		f.mu.Unlock()
+		f.callback(t, q.Get("state"))
+		status, session := f.session(t)
+		context, _ := session["initialContext"].(map[string]any)
+		if status != 200 || context["materialId"] != "12" || context["importId"] == nil {
+			t.Fatalf("missing import intent: %d %v", status, context)
+		}
+	}
+	f.callback(t, f.start(t, "?materialId=12&importId=forged"))
+	_, session := f.session(t)
+	if context := session["initialContext"].(map[string]any); context["importId"] != nil {
+		t.Fatal("GET enabled automatic import")
 	}
 }

@@ -170,7 +170,11 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 			if s.mode() == "old-site" {
 				originRejected = o != cfg.oldSite.publicURL
 			}
-			if c.GetHeader("Sec-Fetch-Site") == "cross-site" || originRejected {
+			reviewStart := s.mode() == "old-site" && c.Request.Method == http.MethodPost && c.Request.URL.Path == "/api/auth/old-site/start"
+			if reviewStart {
+				originRejected = o != cfg.oldSite.issuer
+			}
+			if originRejected || c.GetHeader("Sec-Fetch-Site") == "cross-site" && !reviewStart {
 				fail(c, 403, "ORIGIN_REJECTED", "请求来源不被允许")
 				return
 			}
@@ -193,6 +197,7 @@ func newServer(cfg config, db *store) (*appServer, *gin.Engine) {
 	})
 	if s.mode() == "old-site" {
 		r.GET("/api/auth/old-site/start", s.startOldSiteAuth)
+		r.POST("/api/auth/old-site/start", s.startOldSiteAuth)
 		r.GET("/api/auth/old-site/callback", s.finishOldSiteAuth)
 	} else {
 		r.POST("/api/internal/session", func(c *gin.Context) {

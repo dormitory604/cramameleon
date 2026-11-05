@@ -175,10 +175,19 @@ type initialContext struct {
 	MaterialID string `json:"materialId,omitempty"`
 	PackageID  string `json:"packageId,omitempty"`
 	ItemID     string `json:"itemId,omitempty"`
+	ImportID   string `json:"importId,omitempty"`
 }
 
 func readInitialContext(c *gin.Context) (initialContext, error) {
-	v := initialContext{c.Query("materialId"), c.Query("packageId"), c.Query("itemId")}
+	get := c.Query
+	if c.Request.Method == http.MethodPost {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
+		if err := c.Request.ParseForm(); err != nil {
+			return initialContext{}, err
+		}
+		get = c.Request.PostForm.Get
+	}
+	v := initialContext{MaterialID: get("materialId"), PackageID: get("packageId"), ItemID: get("itemId")}
 	for _, id := range []string{v.MaterialID, v.PackageID, v.ItemID} {
 		if id != "" && !validSubject(id) {
 			return v, errors.New("invalid resource ID")
@@ -192,7 +201,7 @@ func readInitialContext(c *gin.Context) (initialContext, error) {
 
 func (s *appServer) startOldSiteAuth(c *gin.Context) {
 	resource, e := readInitialContext(c)
-	if e != nil {
+	if e != nil || c.Request.Method == http.MethodPost && resource.MaterialID == "" && resource.PackageID == "" {
 		fail(c, 400, "INVALID_REQUEST", "资料入口参数不正确")
 		return
 	}
@@ -218,6 +227,12 @@ func (s *appServer) startOldSiteAuth(c *gin.Context) {
 		return
 	}
 	ctxJSON, _ := json.Marshal(resource)
+	flowContext := ctxJSON
+	if c.Request.Method == http.MethodPost {
+		// Only a form submitted from the old site's resource page can request automatic import.
+		resource.ImportID = stateHash
+		flowContext, _ = json.Marshal(resource)
+	}
 	tx, e := s.store.db.BeginTx(c.Request.Context(), nil)
 	if e != nil {
 		fail(c, 503, "STORAGE_FAILED", "授权存储暂不可用")
@@ -244,7 +259,7 @@ func (s *appServer) startOldSiteAuth(c *gin.Context) {
 		fail(c, 429, "AUTH_FLOW_LIMIT", "授权请求较多，请稍后再试")
 		return
 	}
-	if _, e = tx.Exec("INSERT INTO auth_flows VALUES(?,?,?,?,?)", stateHash, tokenHash(browser), sealed, string(ctxJSON), now+300); e != nil {
+	if _, e = tx.Exec("INSERT INTO auth_flows VALUES(?,?,?,?,?)", stateHash, tokenHash(browser), sealed, string(flowContext), now+300); e != nil {
 		fail(c, 503, "STORAGE_FAILED", "无法保存授权流程")
 		return
 	}
@@ -450,7 +465,11 @@ func (s *appServer) authenticate(c *gin.Context) {
 			fail(c, 503, "STORAGE_FAILED", "会话存储暂不可用")
 			return
 		}
-		if issuer != s.cfg.oldSite.issuer || !s.cfg.oldSite.allows(subject) {
+		if issuer != s.cfg.oldSite.issuer || !validSubject(subject) {
+			fail(c, 401, "AUTH_REQUIRED", "请从破壁计划重新进入")
+			return
+		}
+		if !s.cfg.oldSite.allows(subject) {
 			fail(c, 403, "ENTRY_NOT_ALLOWED", "当前账号暂不可进入，请重新通过破壁计划授权或联系项目维护者")
 			return
 		}
